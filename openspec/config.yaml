@@ -1,0 +1,92 @@
+schema: spec-driven
+
+context: |
+  Project: QueryForge.
+  Product direction: a provider-agnostic data agent framework where NL2SQL is
+  the first capability. QueryForge should convert natural-language data
+  questions into safe, validated, observable database actions.
+
+  Current product stage: early local CLI prototype. The first scoped feature is
+  a thin NL2SQL loop: user question -> LLM provider -> generated SQL -> safety
+  validation -> query executor tool -> Postgres -> result.
+
+  Current stack: Python 3.12+, uv, Pydantic v2, psycopg, sqlglot, pytest, Ruff,
+  Docker Compose, PostgreSQL. Groq is the first hosted LLM connector through an
+  OpenAI-compatible API shape. The LLM layer must remain provider-agnostic.
+
+  Architecture principle: LLMs suggest; QueryForge validates and decides.
+  Generated SQL must never be trusted directly. Database execution must only
+  happen after QueryForge validation and policy checks.
+
+  Near-term scope order:
+  1. NL2SQL CLI loop for Postgres.
+  2. Stronger SQL guardrails.
+  3. Run traces and observability.
+  4. Eval harness.
+  5. Memory based on traces, corrections, and approved examples.
+  6. Database adapter abstraction and additional database connectors.
+  7. Governance, approvals, and policy controls.
+
+  Out of scope for the first NL2SQL feature: frontend, public API, dashboards,
+  LangGraph orchestration, multi-database support, persistent memory, full eval
+  suite, and governance workflows.
+
+  Living architecture diagrams live in `docs/architecture-diagrams.md`. Keep
+  them aligned with the current code flow, class relationships, and end-user
+  actions as the project changes.
+
+  Code should follow SOLID principles where they reduce coupling, preserve
+  clear boundaries, and make future providers, policies, tools, databases, and
+  interfaces easier to add. Add abstractions only when they protect a real
+  extension point or remove meaningful coupling.
+
+rules:
+  proposal:
+    - Keep each change focused on one intent that can be stated in one sentence.
+    - Include explicit Non-Goals for anything tempting but out of scope.
+    - Prefer small vertical slices over broad platform rewrites.
+    - List capability paths in kebab-case and avoid inventing specs for pure implementation details.
+    - Call out whether a change affects safety, database execution, LLM behavior, or public interfaces.
+    - Never include real API keys, tokens, credentials, connection passwords, or other secrets in proposals, specs, design, tasks, examples, tests, or committed files.
+
+  specs:
+    - Write behavior-first requirements with SHALL or MUST.
+    - Every requirement must include at least one concrete scenario.
+    - Include negative scenarios for unsafe SQL, bad LLM output, database errors, or policy rejection when relevant.
+    - Do not bake implementation details into requirements unless they are externally observable behavior.
+    - Preserve the invariant that memory, LLM output, and retrieved examples can provide context but cannot bypass validation.
+    - Secret-bearing configuration must be local-only or environment-provided; committed example files may contain placeholders only.
+
+  design:
+    - Include a simple data-flow diagram or ordered flow for agent changes.
+    - When a change alters execution flow, core classes, result models, statuses, CLI commands, setup steps, or user-visible behavior, update `docs/architecture-diagrams.md` or explicitly state why no diagram update is needed.
+    - Prefer modular boundaries aligned with SOLID principles; separate provider access, validation policy, execution, result contracts, and orchestration unless a simpler boundary is clearly sufficient.
+    - State trust boundaries explicitly, especially between LLM output, validation, and database execution.
+    - Describe provider-agnostic interfaces before provider-specific connectors.
+    - Document alternatives considered and why the chosen approach is smaller or safer.
+    - Identify risks around hallucinated SQL, schema drift, unsafe execution, cost, latency, and observability gaps.
+
+  tasks:
+    - Keep tasks small enough to implement and verify independently.
+    - Tie tasks back to requirements when possible.
+    - Include tests for safety-critical and error-path behavior.
+    - Do not add frontend, API, dashboards, memory, evals, or multi-database support unless the proposal explicitly scopes them.
+    - Include a check that real secrets are not committed when a change touches provider credentials, dotenv files, or database connection configuration.
+    - Include a documentation task to update and validate `docs/architecture-diagrams.md` when a change affects code flow, class relationships, or user actions.
+    - End with validation tasks for Ruff, pytest, and OpenSpec strict validation.
+
+operations:
+  apply:
+    guidance:
+      - Implement only the current OpenSpec change scope.
+      - Preserve provider-agnostic boundaries; do not couple the agent directly to Groq or Postgres-specific code when an interface is intended.
+      - Keep safety checks outside the LLM provider; the LLM is not the guardrail.
+      - "Preserve SOLID-aligned module boundaries: providers generate candidates, policy validates, executors execute approved SQL, models define contracts, and the agent orchestrates."
+      - Do not commit real secrets to git or GitHub; use ignored `.env` files, shell environment variables, or placeholder-only examples.
+      - If implementation changes execution flow, core classes, result models, statuses, CLI commands, setup steps, or user-visible behavior, update `docs/architecture-diagrams.md` and verify the diagrams still match the code.
+      - Run focused tests plus Ruff before reporting completion.
+  archive:
+    guidance:
+      - Archive only after tasks are complete, tests pass, and OpenSpec validates strictly.
+      - Confirm `docs/architecture-diagrams.md` is updated or intentionally unchanged before archive.
+      - Summarize which specs changed and any remaining risks or intentionally deferred work.

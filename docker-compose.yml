@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: queryforge-postgres
+    environment:
+      POSTGRES_DB: queryforge
+      POSTGRES_USER: queryforge
+      POSTGRES_PASSWORD: queryforge
+    ports:
+      - "55432:5432"
+    volumes:
+      - queryforge-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U queryforge -d queryforge"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  queryforge-postgres-data:

@@ -1,0 +1,1735 @@
+You are the principal engineer responsible for implementing **QueryForge** end to end.
+
+The repository root contains `PRD.md`. Treat that file as the authoritative product specification. OpenSpec and Sembler are already installed in this development environment.
+
+Your objective is to build the complete QueryForge MVP described in `PRD.md` using disciplined spec-driven development, strong architectural boundaries, comprehensive tests, proper agent evaluations, and production-conscious safety controls.
+
+Do not merely scaffold files, generate mock-only implementations, or leave placeholder logic. Implement working vertical slices phase by phase until the MVP acceptance criteria in `PRD.md` are satisfied.
+
+# 1. Authoritative sources and precedence
+
+Use the following precedence when making implementation decisions:
+
+1. Security and correctness requirements in `PRD.md`
+2. MVP acceptance criteria in `PRD.md`
+3. Explicit architectural boundaries in `PRD.md`
+4. OpenSpec change specifications created during implementation
+5. Existing repository conventions
+6. Reasonable engineering assumptions documented through ADRs
+
+If two sections of `PRD.md` appear inconsistent:
+
+1. Prefer the interpretation that maximizes correctness and safety.
+2. Prefer the narrower MVP interpretation.
+3. Record the decision in an Architecture Decision Record.
+4. Do not silently invent a broader feature.
+
+Do not modify `PRD.md` unless a genuine contradiction prevents implementation. When implementation clarification is needed, create an ADR or OpenSpec clarification instead.
+
+# 2. Mandatory product boundaries
+
+QueryForge consists of three major areas.
+
+## 2.1 ForgeSQL
+
+ForgeSQL is a standalone NL-to-SQL agent.
+
+It must:
+
+* accept one-turn natural-language analytical questions
+* retrieve only relevant schema context
+* resolve verified semantic metrics
+* generate a structured query plan
+* generate parameterized PostgreSQL SQL
+* validate SQL deterministically
+* perform risk-based query preflight
+* execute only through the validated read-only query gateway
+* support a maximum of one repair attempt
+* verify the returned result
+* generate a grounded answer
+* verify every numerical claim against returned data
+* expose SQL, parameters, assumptions, warnings, status, and trace information
+
+ForgeSQL must not:
+
+* import ForgeDash
+* call ForgeDash
+* create dashboards
+* execute raw unrestricted SQL
+* perform database writes
+* invent permanent semantic metrics
+* perform causal “why” investigations in the MVP
+* rely on the LLM as a security control
+
+## 2.2 ForgeDash
+
+ForgeDash is a standalone dashboard-generation agent.
+
+It must:
+
+* use only verified and versioned metrics and dimensions
+* generate dashboard JSON specifications
+* support five to eight widgets
+* support preview and explicit approval
+* support one natural-language dashboard modification
+* validate chart compatibility deterministically
+* pin metric versions
+* persist approved dashboard configurations
+
+ForgeDash must not:
+
+* import ForgeSQL
+* call ForgeSQL
+* generate unrestricted SQL
+* answer ad hoc analytical questions
+* invent or verify permanent metrics
+* silently publish dashboard modifications
+
+## 2.3 ForgeCore
+
+ForgeCore contains deterministic shared packages:
+
+* contracts
+* metadata catalog
+* semantic layer
+* metric compiler
+* SQL safety engine
+* query gateway
+* query preflight
+* caching
+* tracing
+* evaluation utilities
+
+ForgeSQL and ForgeDash may import ForgeCore packages.
+
+ForgeSQL and ForgeDash must never import or call each other.
+
+Add automated architecture tests that fail if this boundary is violated.
+
+# 3. Development methodology
+
+Use OpenSpec throughout the implementation.
+
+First inspect the installed OpenSpec version, configuration, profile, available commands, slash commands, skills, and repository integration. Do not assume command syntax if the installed version exposes a different workflow.
+
+Use the installed OpenSpec lifecycle to:
+
+1. Explore the repository and PRD.
+2. Create an umbrella QueryForge MVP specification when appropriate.
+3. Create a separate change proposal for each implementation phase.
+4. Produce explicit requirements, design notes, task lists, acceptance criteria, and spec deltas.
+5. Review each proposal against `PRD.md`.
+6. Apply the change.
+7. Verify the implementation.
+8. Archive the completed change only after its tests and acceptance criteria pass.
+
+Create OpenSpec changes for at least:
+
+1. Repository and development foundation
+2. PostgreSQL demo schema and seed generation
+3. Metadata catalog
+4. SQL safety engine and query gateway
+5. Semantic layer and metric compiler
+6. ForgeSQL agent
+7. ForgeSQL evaluation framework
+8. Static dashboard engine
+9. ForgeDash agent
+10. Optimization, documentation, and release readiness
+
+Do not create one enormous unstructured OpenSpec change containing the entire project.
+
+Every OpenSpec task must be small enough to validate independently.
+
+Maintain traceability between:
+
+* PRD requirement
+* OpenSpec requirement
+* implementation file
+* automated test
+* acceptance result
+
+Create a traceability document such as:
+
+```text
+docs/requirements-traceability.md
+```
+
+Use stable requirement identifiers such as:
+
+```text
+QF-ARCH-001
+QF-SAFE-001
+QF-SQL-001
+QF-METRIC-001
+QF-EVAL-001
+QF-DASH-001
+```
+
+# 4. Sembler usage
+
+Sembler is installed for efficient code search and codebase understanding.
+
+Before using it:
+
+1. Inspect the installed Sembler command, integration, plugin, MCP interface, or help documentation.
+2. Determine its supported search and indexing workflow.
+3. Do not invent Sembler commands.
+
+Use Sembler before making changes to:
+
+* locate existing implementations
+* find interfaces and type definitions
+* trace dependencies
+* find all call sites
+* inspect package boundaries
+* discover test coverage
+* identify duplicated logic
+* understand data flow
+* verify that ForgeSQL and ForgeDash remain decoupled
+
+At the beginning of each phase, use Sembler to understand the code affected by that phase.
+
+At the end of each phase, use Sembler to:
+
+* find all references to newly introduced contracts
+* detect accidental duplicate implementations
+* detect bypasses around the query gateway
+* detect forbidden ForgeSQL-to-ForgeDash dependencies
+* detect raw database execution outside approved packages
+* identify stale or unused code
+
+If Sembler is temporarily unavailable, use repository-native search tools such as `rg`, symbol search, AST search, or language-server references and document the fallback.
+
+# 5. General operating rules
+
+Before writing code:
+
+1. Read `PRD.md` completely.
+2. Inspect the full repository tree.
+3. Inspect existing package manifests, configuration, CI, tests, and documentation.
+4. Inspect OpenSpec and Sembler installation details.
+5. Determine whether the repository is empty, partially initialized, or already contains implementation.
+6. Create an architecture map.
+7. Create the first OpenSpec proposal.
+
+Do not overwrite useful existing work.
+
+Do not replace working code merely to match a preferred style.
+
+Do not make broad refactors unrelated to the active OpenSpec change.
+
+Do not commit or push changes unless explicitly instructed.
+
+Do not store secrets in the repository.
+
+Do not hardcode API keys, passwords, database credentials, model names, model prices, or environment-specific URLs.
+
+Use `.env.example` with safe placeholders.
+
+Use exact dependency versions in lockfiles.
+
+Do not use deprecated LangChain or LangGraph APIs. Inspect the installed versions and use APIs supported by those versions.
+
+Do not hide failures with broad exception handlers.
+
+Do not return fake data when a real component fails.
+
+Do not implement silent fallbacks that weaken safety.
+
+Do not create a multi-agent swarm.
+
+Do not add Redis, Kubernetes, Kafka, distributed tracing infrastructure, or external orchestration unless required by `PRD.md` for the MVP.
+
+# 6. Default technology choices
+
+Preserve existing repository technology choices when reasonable.
+
+If the repository has not been initialized, use:
+
+## Backend
+
+* Python 3.12
+* FastAPI
+* Pydantic v2
+* SQLAlchemy 2.x asynchronous APIs
+* asyncpg as the PostgreSQL driver
+* Alembic
+* PostgreSQL
+* SQLGlot using the PostgreSQL dialect
+* LangChain
+* LangGraph
+* PyYAML or ruamel.yaml
+* pytest
+* pytest-asyncio
+* HTTPX for API tests
+* Ruff
+* mypy or Pyright
+
+Prefer `uv` when it is installed and compatible with the environment. Otherwise use the existing Python package manager.
+
+## Frontend
+
+* React
+* TypeScript
+* Vite
+* TanStack Query
+* a single charting library selected from the PRD recommendations
+* Vitest
+* React Testing Library
+* ESLint
+* TypeScript strict mode
+
+Choose one charting library and use it consistently.
+
+## Local infrastructure
+
+* Docker Compose
+* PostgreSQL container
+* backend application
+* frontend application
+
+Redis is not required for the initial implementation. Use an in-process bounded cache or database-backed cache abstraction for the MVP, with a replaceable interface.
+
+# 7. Repository structure
+
+Use the repository structure in `PRD.md` unless existing conventions justify a compatible alternative.
+
+Target structure:
+
+```text
+apps/
+  web/
+  forgesql/
+  forgedash/
+
+packages/
+  contracts/
+  metadata/
+  semantic_layer/
+  metric_compiler/
+  sql_safety/
+  query_gateway/
+  caching/
+  tracing/
+  evaluation/
+
+infrastructure/
+  docker/
+  migrations/
+  seed_data/
+
+benchmarks/
+  forgesql/
+    dev/
+    held_out/
+  forgedash/
+
+docs/
+  architecture/
+  adr/
+  api/
+  operations/
+```
+
+Python packages must have explicit public interfaces.
+
+Avoid circular dependencies.
+
+Define the dependency direction:
+
+```text
+contracts
+   ↑
+metadata / semantic_layer / sql_safety / tracing
+   ↑
+metric_compiler / query_gateway / evaluation
+   ↑
+forgesql or forgedash
+```
+
+The web application may consume APIs from both agents but must not contain their domain logic.
+
+# 8. Phase 0: Repository discovery and design
+
+Create an OpenSpec proposal for repository initialization and architecture.
+
+Deliver:
+
+* repository inventory
+* architecture diagram
+* package dependency rules
+* development commands
+* Docker Compose design
+* environment variable contract
+* testing strategy
+* linting and typing configuration
+* ADR template
+* requirements traceability skeleton
+
+Create ADRs for at least:
+
+1. Monorepo package structure
+2. Shared-package versus network-service boundaries
+3. Model provider abstraction
+4. Analytics database and platform persistence credential separation
+5. SQL parameterization strategy
+6. Metric versioning strategy
+7. Local cache strategy
+8. Dashboard persistence strategy
+
+Create the following root-level developer commands, using a Makefile, task runner, or scripts:
+
+```text
+bootstrap
+dev
+test
+test-unit
+test-integration
+test-evals
+lint
+typecheck
+format
+db-up
+db-down
+db-migrate
+db-seed-small
+db-seed-full
+```
+
+The exact command names may differ, but provide one documented, coherent developer interface.
+
+# 9. Phase 1: PostgreSQL demo database
+
+Implement the reproducible e-commerce database required by `PRD.md`.
+
+Required business entities:
+
+* customers
+* orders
+* order_items
+* products
+* categories
+* payments
+* refunds
+
+Design the schema with explicit grains.
+
+Document each table’s grain in metadata and schema documentation.
+
+Examples:
+
+```text
+customers: one row per customer
+orders: one row per order
+order_items: one row per purchased product line
+payments: one row per payment attempt
+refunds: one row per refund transaction
+```
+
+Preserve historical correctness.
+
+At minimum:
+
+* `order_items.unit_price` must represent purchase-time price
+* historical category analysis must not silently use only the product’s current category
+* order financial components must be unambiguous
+* refund relationships must support multiple and partial refunds
+* payment attempts must support failures and retries
+* timestamps must be timezone-aware
+
+Use an explicit design such as:
+
+* purchase-time category snapshot on `order_items`
+* or a properly designed category history table
+
+Record the decision in an ADR.
+
+Include constraints:
+
+* primary keys
+* foreign keys
+* check constraints
+* useful indexes
+* uniqueness rules where valid
+* nonnegative monetary amounts
+* valid quantities
+* valid status values
+
+Use integer minor currency units or precise `NUMERIC` values. Do not use floating point for money.
+
+Create deterministic seed generation using a fixed seed.
+
+Support two seed profiles:
+
+## Small profile
+
+Suitable for development and automated tests.
+
+## Full profile
+
+Approximately aligned with the PRD:
+
+* 10,000 customers
+* 100,000 orders
+* 250,000 order items
+* 2,000 products
+* 20 categories
+* 24 months of history
+
+Include realistic edge cases:
+
+* cancelled orders
+* zero-value orders
+* duplicate product names
+* partial refunds
+* multiple refunds
+* failed payment attempts
+* delayed successful payments
+* missing optional values
+* timezone boundary cases
+* category changes
+* products without recent sales
+* customers without recent purchases
+
+Create a dedicated analytics read-only role.
+
+Create a separate platform role for QueryForge-owned state such as dashboard definitions and traces when persistence requires writes.
+
+The LLM-generated query path must never receive the platform write credentials.
+
+Add integration tests proving the analytics role cannot:
+
+* insert
+* update
+* delete
+* create
+* alter
+* drop
+* call prohibited procedures
+
+# 10. Phase 2: Metadata catalog
+
+Implement a deterministic metadata catalog.
+
+It must extract:
+
+* schemas
+* tables
+* columns
+* types
+* nullability
+* primary keys
+* foreign keys
+* indexes
+* approximate row counts
+* approved business schemas
+* restricted objects
+* table-grain annotations
+* table and column descriptions
+* metadata refresh timestamp
+* schema version
+
+Trusted metadata code may access PostgreSQL system catalogs.
+
+Generated analytical queries may not.
+
+Create typed metadata contracts.
+
+Implement:
+
+* full metadata refresh
+* metadata lookup by table
+* relationship lookup
+* keyword search
+* synonym-aware search
+* foreign-key-neighbour expansion
+* schema-version computation
+* bounded metadata cache
+
+Do not introduce vector search unless deterministic search proves insufficient and an OpenSpec change justifies it.
+
+Add tests for:
+
+* composite keys
+* multiple foreign keys
+* self-references
+* missing descriptions
+* restricted schemas
+* schema-version changes
+* metadata cache invalidation
+
+# 11. Phase 3: SQL safety engine and query gateway
+
+This phase is security-critical.
+
+Create a dedicated OpenSpec change with threat model, abuse cases, and negative acceptance tests.
+
+## 11.1 SQL contract
+
+Represent generated SQL as:
+
+```python
+ParameterizedQuery(
+    sql_template: str,
+    parameters: dict[str, SupportedScalar],
+    expected_result_grain: str,
+    referenced_metric_versions: list[str],
+)
+```
+
+Use bound parameters for user-derived values.
+
+Do not interpolate user values into SQL strings.
+
+Identifiers and SQL expressions must be chosen from validated metadata or semantic definitions.
+
+## 11.2 SQL AST validation
+
+Use SQLGlot with the PostgreSQL dialect.
+
+Parse the complete SQL input and reject multiple statements.
+
+Recursively inspect:
+
+* top-level statement
+* CTEs
+* nested queries
+* set operations
+* joins
+* tables
+* schemas
+* columns
+* function calls
+* subqueries
+* comments or statement chaining
+* limits
+* locking clauses
+
+Allow only:
+
+* `SELECT`
+* read-only `WITH`
+* safe set operations where explicitly supported
+* `EXPLAIN` without `ANALYZE` inside trusted preflight code
+
+Reject:
+
+* INSERT
+* UPDATE
+* DELETE
+* MERGE
+* CREATE
+* ALTER
+* DROP
+* TRUNCATE
+* GRANT
+* REVOKE
+* COPY
+* CALL
+* DO
+* data-modifying CTEs
+* SELECT FOR UPDATE
+* SELECT FOR SHARE
+* EXPLAIN ANALYZE
+* multiple statements
+* access to unapproved schemas
+* access to temporary schemas
+* access to `pg_catalog`
+* access to `information_schema`
+* prohibited tables and columns
+
+## 11.3 Function allowlist
+
+Create a deny-by-default function policy.
+
+Allow only functions required by supported analytical workloads, such as approved:
+
+* aggregate functions
+* date and time functions
+* numeric functions
+* string normalization functions
+* conditional functions
+
+Reject:
+
+* unknown functions
+* volatile functions
+* delay functions
+* filesystem functions
+* network functions
+* large-object functions
+* administrative functions
+* external-connection functions
+* extension-provided functions unless explicitly reviewed and approved
+
+Do not rely only on function names. Where feasible, combine AST inspection with database function metadata and volatility classification.
+
+Add adversarial tests for functions such as:
+
+* sleep or delay operations
+* filesystem access
+* network or database-link access
+* large-object operations
+* administrative configuration
+* unsafe extension functions
+
+## 11.4 Query limits
+
+The safety engine must enforce or verify:
+
+* default row limit
+* hard row limit
+* returned byte limit
+* statement timeout
+* lock timeout
+* controlled work memory
+* temporary-file limit where supported
+* global concurrency limit
+* one active ForgeSQL execution per conversation
+
+A user-provided or model-generated limit may be reduced by the gateway.
+
+## 11.5 Query preflight
+
+Create risk classification.
+
+Example risk levels:
+
+```text
+LOW
+MEDIUM
+HIGH
+REJECTED
+```
+
+Low-risk examples:
+
+* deterministic compiled metric query
+* indexed filter on a small approved table
+* bounded aggregation using a verified metric
+
+Queries containing joins, subqueries, CTEs, large-table scans, uncertain cardinality, cross joins, or complex aggregation must receive:
+
+```sql
+EXPLAIN (FORMAT JSON)
+```
+
+Never use `EXPLAIN ANALYZE` for preflight.
+
+Parse the plan and evaluate:
+
+* total cost
+* estimated rows
+* scan types
+* join types
+* cross joins
+* Cartesian risks
+* large sequential scans
+* nested-loop risk
+* estimated output size
+
+Use configurable thresholds.
+
+EXPLAIN is not the only safety mechanism.
+
+## 11.6 Query gateway
+
+The query gateway must not accept arbitrary raw SQL directly from an API request.
+
+The flow must be:
+
+```text
+ParameterizedQuery
+→ validation
+→ immutable ValidatedQuery
+→ optional preflight
+→ immutable ApprovedQuery
+→ execution
+```
+
+The executor must accept only an approved query object or opaque validated-query identifier created by trusted code.
+
+Prevent direct bypass.
+
+Execute inside a read-only transaction.
+
+Apply session-local resource settings.
+
+Return a typed result:
+
+```python
+QueryExecutionResult(
+    columns,
+    rows,
+    row_count,
+    truncated,
+    execution_ms,
+    data_freshness,
+    warnings,
+)
+```
+
+Add tests proving no agent path can call the database directly.
+
+# 12. Phase 4: Semantic layer and metric compiler
+
+Implement version-controlled YAML semantic definitions.
+
+The MVP must include five verified metrics:
+
+1. Net revenue
+2. Completed order count
+3. Average order value
+4. Refund amount
+5. Refund rate
+
+Also create verified dimensions required by the benchmark and dashboard.
+
+Each metric must define:
+
+* immutable version
+* identifier
+* display name
+* description
+* owner
+* verification status
+* final grain
+* source components
+* source grain
+* pre-aggregation rule
+* aggregation type
+* combine expression
+* filters
+* allowed dimensions
+* formatting
+* synonyms
+* required join paths
+* test cases
+
+Do not store complex metrics as an unsafe raw SQL expression.
+
+For net revenue, separately aggregate item gross revenue and refunds to a compatible grain before joining.
+
+The compiler must:
+
+1. Resolve metric version.
+2. Resolve dimensions and filters.
+3. validate supported combinations.
+4. determine required tables.
+5. pre-aggregate components at their declared grain.
+6. compile a parameterized query.
+7. validate the compiled query through the safety engine.
+8. return a typed compiled metric query.
+
+Metric versions are immutable.
+
+A change creates a new metric version.
+
+Saved dashboards pin versions.
+
+Add unit tests with hand-calculated expected values for every metric.
+
+Include cases with:
+
+* multiple items
+* multiple refunds
+* partial refunds
+* cancelled orders
+* no refunds
+* zero-value orders
+* multiple payment attempts
+
+# 13. Phase 5: ForgeSQL agent
+
+Use LangChain for:
+
+* model abstraction
+* typed tools
+* structured outputs
+* runtime dependency context
+* model usage metadata
+
+Use LangGraph for:
+
+* typed state
+* explicit nodes
+* conditional edges
+* bounded retries
+* execution state
+* traceable workflow
+
+Do not use a generic unconstrained SQL agent toolkit as the production implementation.
+
+## 13.1 ForgeSQL graph state
+
+Create a strongly typed state containing only required workflow data, such as:
+
+```python
+class ForgeSQLState(TypedDict):
+    request_id: str
+    conversation_id: str
+    question: str
+    request_status: str
+    candidate_metadata: list[...]
+    resolved_metrics: list[...]
+    query_plan: QueryPlan | None
+    generated_query: ParameterizedQuery | None
+    validation_result: ValidationResult | None
+    preflight_result: PreflightResult | None
+    execution_result: QueryExecutionResult | None
+    verification_result: ResultVerification | None
+    repair_count: int
+    answer: GroundedAnswer | None
+    trace_id: str
+```
+
+Do not place secrets or database clients in serializable graph state.
+
+Inject runtime services through LangChain or LangGraph runtime context.
+
+## 13.2 ForgeSQL graph
+
+Implement explicit nodes:
+
+```text
+classify_request
+retrieve_relevant_schema
+resolve_semantic_metrics
+create_query_plan
+generate_sql_template
+validate_sql
+repair_sql
+preflight_query
+execute_query
+verify_result
+generate_grounded_answer
+verify_answer_claims
+finalize_response
+```
+
+Implement conditional transitions:
+
+* ambiguous request → `clarification_required`
+* unsupported capability → `unsupported`
+* invalid unsafe SQL → repair if eligible, otherwise `blocked`
+* expensive query → `blocked`
+* timeout → `timeout`
+* verification failure → repair if eligible
+* second failure → abstain
+* successful verification → answer generation
+
+Enforce one repair attempt in application code, not only in prompts.
+
+## 13.3 Structured outputs
+
+Use Pydantic models or equivalent structured outputs for:
+
+* request classification
+* metadata selection
+* metric resolution
+* query plan
+* generated SQL template
+* repair proposal
+* result interpretation
+* grounded answer claims
+
+Do not parse informal prose to recover critical control information.
+
+## 13.4 Query planning
+
+The query plan must represent:
+
+* intent
+* verified metric references
+* dimension references
+* required tables
+* filters
+* date semantics
+* grouping
+* sorting
+* limit
+* expected result grain
+* assumptions
+* unsupported aspects
+
+Reject or clarify ambiguous date phrases when deterministic resolution is not possible.
+
+The MVP is one-turn and stateless.
+
+Do not resolve pronouns such as “what about the month before?” from prior conversation context.
+
+## 13.5 Model provider abstraction
+
+Do not couple domain logic to one model provider.
+
+Create a provider configuration layer.
+
+Use environment configuration for:
+
+* model provider
+* model name
+* timeout
+* maximum tokens
+* retry policy
+* temperature
+* pricing snapshot reference
+
+Use deterministic or low temperature for structured planning and SQL generation.
+
+Tests must run without external model access using fake or scripted models.
+
+Model-dependent integration tests must be opt-in.
+
+## 13.6 Grounded answer generation
+
+Prefer deterministic answer templates for simple result shapes.
+
+For complex supported result shapes, constrain the LLM to returned rows.
+
+Represent answer claims explicitly:
+
+```python
+GroundedClaim(
+    text: str,
+    evidence_rows: list[int],
+    evidence_columns: list[str],
+    deterministic_calculation: Optional[str],
+)
+```
+
+Every numerical claim must map to:
+
+* a returned cell
+* or a deterministic calculation over returned cells
+
+Reject unsupported numbers.
+
+Do not expose fake decimal confidence scores.
+
+Use statuses:
+
+* verified
+* verified_with_warnings
+* clarification_required
+* unsupported
+* blocked
+* timeout
+
+# 14. Phase 6: ForgeSQL evaluation framework
+
+Evals are a first-class product component.
+
+Do not postpone them until the end.
+
+Create the first benchmark cases before prompt tuning.
+
+## 14.1 Benchmark composition
+
+Create 50 cases:
+
+* 10 single-table filtering and aggregation cases
+* 10 date and period comparison cases
+* 10 multi-table join cases
+* 10 ratio and ranking cases
+* 5 ambiguous questions that must request clarification
+* 5 adversarial or unsafe requests that must be blocked
+
+Split:
+
+* 30 development cases
+* 20 held-out cases
+
+Do not use held-out cases in prompts, examples, few-shot demonstrations, or optimization logic.
+
+## 14.2 Benchmark schema
+
+Each case should include appropriate fields such as:
+
+```yaml
+id:
+category:
+question:
+expected_status:
+expected_metric_refs:
+expected_dimension_refs:
+expected_tables:
+required_filters:
+forbidden_tables:
+forbidden_functions:
+expected_result:
+comparison_strategy:
+maximum_model_calls:
+maximum_repair_count:
+notes:
+```
+
+## 14.3 Evaluation levels
+
+Evaluate each stage independently:
+
+1. Request classification accuracy
+2. Schema retrieval recall and precision
+3. Metric-selection accuracy
+4. Query-plan accuracy
+5. SQL parse success
+6. Safety validation
+7. Table-selection accuracy
+8. Join correctness
+9. Filter correctness
+10. Aggregation correctness
+11. Execution success
+12. Result equivalence
+13. Abstention correctness
+14. Repair success
+15. Answer claim grounding
+16. Latency
+17. Model-call count
+18. Input and output tokens
+19. Estimated cost when pricing is configured
+
+Do not use exact SQL string equality as the primary correctness measure.
+
+Compare executed results after canonical ordering and type normalization.
+
+## 14.4 Additional robustness evals
+
+Implement:
+
+* paraphrase robustness
+* repeatability across multiple runs
+* date-boundary tests
+* metamorphic tests
+* schema mutation tests
+* prompt-injection tests
+* dangerous-function tests
+* expensive-query tests
+* empty-result tests
+* null-handling tests
+* duplicate-row and join-multiplication tests
+
+Examples of metamorphic properties:
+
+* narrowing a date range cannot add rows outside that period
+* increasing a top-N limit preserves the earlier top results
+* adding a category filter cannot include other categories
+* aggregate totals must equal the sum of compatible grouped totals
+* refund rate must remain between valid bounds
+* equivalent paraphrases should produce result-equivalent output
+
+## 14.5 Regression gates
+
+Create a single eval command suitable for CI.
+
+The implementation must fail CI when:
+
+* unsafe query execution is nonzero
+* answer claim grounding falls below 100%
+* verified metric usage falls below 100% where required
+* result accuracy falls below the PRD target
+* architecture boundaries are violated
+
+Produce machine-readable JSON and human-readable Markdown reports.
+
+# 15. Phase 7: Static dashboard engine
+
+Build the dashboard renderer before ForgeDash.
+
+The dashboard must load without an LLM call.
+
+Define a versioned JSON schema.
+
+Support four widget types:
+
+1. Metric card
+2. Line chart
+3. Bar chart
+4. Table
+
+Each widget must reference:
+
+* verified metric version
+* optional verified dimension version
+* supported filters
+* title
+* formatting
+* layout information
+
+Do not allow raw SQL in a dashboard widget specification.
+
+The backend must compile widget definitions through the metric compiler.
+
+Implement:
+
+* dashboard load
+* global date filter
+* widget query execution
+* bounded widget concurrency
+* per-widget loading state
+* per-widget failure state
+* partial dashboard success
+* cache freshness display
+* force refresh
+* generated query inspection
+* metric definition inspection
+
+Define separate concurrency budgets:
+
+* ForgeSQL per-conversation and global concurrency
+* dashboard per-dashboard widget concurrency
+* gateway global execution concurrency
+
+One failed widget must not fail the full dashboard.
+
+# 16. Phase 8: ForgeDash agent
+
+Use a separate LangGraph graph and separate prompts.
+
+ForgeDash must receive:
+
+* user request
+* verified metric registry
+* verified dimensions
+* supported widgets
+* existing dashboard spec when modifying
+
+Implement graph nodes such as:
+
+```text
+retrieve_verified_metrics
+interpret_dashboard_request
+select_metrics_and_dimensions
+generate_dashboard_specification
+validate_widget_compatibility
+compile_widget_queries
+prepare_preview
+await_approval
+persist_configuration
+```
+
+ForgeDash may propose only verified metrics.
+
+It must not create a metric definition.
+
+It must not generate arbitrary SQL.
+
+Use deterministic chart compatibility rules.
+
+Examples:
+
+* one scalar value → metric card
+* date plus numeric metric → line chart
+* category plus numeric metric → bar chart
+* multi-column detail result → table
+
+The LLM may select among valid options but cannot override compatibility validation.
+
+Implement preview and approval as explicit API states.
+
+Persist only approved dashboard versions.
+
+Pin semantic metric versions.
+
+Support one natural-language modification such as:
+
+```text
+Add monthly refund rate to the dashboard.
+```
+
+Validate the updated specification before preview.
+
+# 17. Phase 9: APIs and frontend
+
+Implement stable versioned APIs.
+
+Suggested endpoints:
+
+```text
+POST /api/v1/forgesql/query
+GET  /api/v1/forgesql/traces/{trace_id}
+
+POST /api/v1/forgedash/generate
+POST /api/v1/forgedash/modify
+POST /api/v1/forgedash/{preview_id}/approve
+GET  /api/v1/dashboards/{dashboard_id}
+POST /api/v1/dashboards/{dashboard_id}/refresh
+
+GET  /api/v1/metadata/tables
+GET  /api/v1/semantic/metrics
+GET  /api/v1/evaluations/latest
+```
+
+Use typed request and response contracts.
+
+The Ask Data interface must display:
+
+* question
+* status
+* answer
+* result table
+* temporary visualization when valid
+* generated SQL template
+* bound parameters with sensitive-value redaction
+* selected metrics
+* assumptions
+* warnings
+* execution duration
+* trace ID
+
+The Dashboard interface must display:
+
+* widgets
+* global filters
+* loading states
+* partial errors
+* last refresh time
+* pinned metric versions
+* query inspection
+* metric information
+
+Provide accessible controls and clear error messages.
+
+Do not expose hidden chain-of-thought or model reasoning.
+
+Show structured plans and trace events only when they are safe and useful.
+
+# 18. Caching
+
+Implement a replaceable cache abstraction.
+
+For the MVP, use an in-process bounded TTL cache unless the repository already has a suitable cache.
+
+Metadata cache key must include:
+
+* connection identifier
+* schema version
+
+Query-result cache key must include:
+
+* connection identifier
+* approved SQL hash
+* normalized bound parameters
+* schema version
+* semantic-layer version
+* authorization scope placeholder for future expansion
+
+Because the MVP is single-user, authorization scope may be a fixed local scope, but the type must not prevent future extension.
+
+Never use the natural-language question alone as the query cache identity.
+
+Default result TTL:
+
+* configurable
+* initial default approximately five minutes
+
+Expose:
+
+* created time
+* expiry time
+* stale status
+* force refresh
+
+Do not cache:
+
+* blocked requests
+* unsafe requests
+* failed queries
+* sensitive results unless explicitly allowed by policy
+
+# 19. Tracing and observability
+
+Every ForgeSQL and ForgeDash run must create an inspectable trace.
+
+Record:
+
+* trace ID
+* request ID
+* agent name
+* graph version
+* prompt version
+* model provider and model name
+* schema version
+* semantic-layer version
+* selected tables
+* selected metrics
+* structured query plan
+* SQL hash
+* redacted SQL template
+* redacted parameters
+* validation decision
+* preflight decision
+* execution duration
+* row count
+* repair count
+* model calls
+* input tokens
+* output tokens
+* pricing snapshot version
+* estimated request cost when calculable
+* verification status
+* warnings
+* error category
+
+Do not store secrets.
+
+Do not store unrestricted raw prompt content or raw database values by default.
+
+Create a redaction policy and tests.
+
+Implement a local trace viewer or structured trace API.
+
+Use a stable event schema so OpenTelemetry or a hosted trace platform can be added later.
+
+# 20. Error handling
+
+Define typed domain errors.
+
+At minimum:
+
+```text
+ClarificationRequired
+UnsupportedRequest
+UnsafeQueryBlocked
+QueryCostExceeded
+QueryTimeout
+QueryExecutionFailed
+ResultVerificationFailed
+AnswerClaimVerificationFailed
+MetricNotFound
+MetricCombinationUnsupported
+DashboardValidationFailed
+```
+
+Map them to stable API error responses.
+
+Do not return Python tracebacks to frontend users.
+
+Log internal stack traces using redaction-safe logging.
+
+For slow or timed-out queries, provide actionable suggestions such as:
+
+* use a smaller date range
+* add a category filter
+* request summarized results
+
+# 21. Security tests
+
+Create explicit negative tests for:
+
+* SQL comments followed by a second statement
+* data-modifying CTEs
+* nested prohibited functions
+* prohibited system schemas
+* unsafe extension functions
+* UNION-based access to prohibited tables
+* subqueries accessing prohibited objects
+* SELECT FOR UPDATE
+* EXPLAIN ANALYZE
+* cross joins exceeding thresholds
+* massive unbounded scans
+* literal secret leakage in traces
+* prompt injection stored inside database text
+* model-generated instructions attempting to bypass tools
+* direct query gateway bypass
+* direct database access from agent modules
+
+Zero unsafe SQL may reach PostgreSQL.
+
+A generated unsafe query may exist in a unit test, but the executor must never receive it.
+
+# 22. Testing strategy
+
+Use a test pyramid.
+
+## Unit tests
+
+Cover:
+
+* semantic parsing
+* metric compilation
+* AST validation
+* function policy
+* parameter binding
+* risk classification
+* result normalization
+* claim verification
+* chart compatibility
+* cache keys
+* trace redaction
+
+## Integration tests
+
+Cover:
+
+* PostgreSQL metadata extraction
+* read-only role enforcement
+* validated query execution
+* EXPLAIN preflight
+* metric results
+* API contracts
+* dashboard persistence
+
+## Agent workflow tests
+
+Use deterministic scripted models.
+
+Test every LangGraph node and branch.
+
+Do not require paid model calls for normal CI.
+
+## Optional live-model tests
+
+Mark separately.
+
+Require explicit environment opt-in.
+
+Record model version and usage.
+
+## End-to-end tests
+
+Cover:
+
+* natural-language question to verified result
+* unsafe question to blocked result
+* ambiguous question to clarification
+* dashboard request to preview to approval
+* dashboard widget execution
+* partial widget failure
+
+# 23. Quality gates
+
+At the end of every OpenSpec change, run:
+
+* backend formatting
+* backend linting
+* backend type checking
+* backend unit tests
+* backend integration tests where applicable
+* frontend linting
+* frontend type checking
+* frontend tests
+* architecture tests
+* security tests
+* relevant evaluation subset
+
+Before declaring the MVP complete, run:
+
+* full test suite
+* full development benchmark
+* full held-out benchmark
+* full safety suite
+* build verification
+* Docker Compose smoke test
+* API smoke test
+* frontend smoke test
+
+Do not proceed past a phase with failing tests unless the failure is explicitly documented as an accepted external limitation. Do not mark OpenSpec tasks complete while their acceptance criteria fail.
+
+# 24. CI
+
+Add CI that runs:
+
+* dependency installation from lockfiles
+* formatting check
+* linting
+* type checking
+* unit tests
+* integration tests using PostgreSQL
+* architecture tests
+* security tests
+* development eval suite
+* frontend build
+* backend startup smoke test
+
+Run the held-out evaluation suite either:
+
+* in CI when deterministic and affordable
+* or as a required documented release command
+
+Do not call external models from standard pull-request CI.
+
+# 25. Documentation
+
+Create:
+
+```text
+README.md
+CONTRIBUTING.md
+SECURITY.md
+docs/architecture.md
+docs/local-development.md
+docs/database-schema.md
+docs/semantic-layer.md
+docs/sql-safety.md
+docs/forgesql-workflow.md
+docs/forgedash-workflow.md
+docs/evaluation.md
+docs/operations.md
+docs/requirements-traceability.md
+docs/adr/
+```
+
+The README must include:
+
+* product overview
+* architecture diagram
+* prerequisites
+* setup
+* environment variables
+* database startup
+* migrations
+* seeding
+* backend startup
+* frontend startup
+* tests
+* evals
+* example questions
+* security limitations
+* MVP scope
+* future production requirements
+
+Document that the MVP is local and single-user.
+
+Do not imply that the MVP is safe for arbitrary untrusted production databases or multi-tenant hosting.
+
+# 26. Required example questions
+
+The completed system should demonstrate supported examples such as:
+
+```text
+What was net revenue last month?
+
+Which five products generated the most net revenue last month?
+
+Compare May and June net revenue by category.
+
+Which category had the highest refund rate?
+
+Which customers placed more than three completed orders?
+```
+
+It must correctly reject or clarify examples such as:
+
+```text
+Why did revenue fall?
+
+Delete all cancelled orders.
+
+Run pg_sleep for 20 seconds.
+
+Show me tables from pg_catalog.
+
+What about the month before?
+```
+
+The last example is unsupported because the MVP does not resolve conversational follow-ups.
+
+# 27. Cost and latency
+
+Record model-call count, tokens, model name, and pricing snapshot for each run.
+
+Do not hardcode dollar targets without an explicit pricing configuration.
+
+Implement deterministic fast paths for questions fully expressible using:
+
+* a verified metric
+* a verified dimension
+* a standard date range
+* a supported sort
+* a supported limit
+
+The fast path should avoid unnecessary agent loops.
+
+Measure:
+
+* total request duration
+* model duration
+* metadata retrieval duration
+* validation duration
+* preflight duration
+* database duration
+* answer generation duration
+
+Create reports for p50 and p95.
+
+Do not optimize by disabling safety checks.
+
+# 28. Implementation conduct
+
+Make reasonable local MVP decisions without repeatedly requesting approval.
+
+Request clarification only when:
+
+* a required secret is unavailable
+* two mutually exclusive product behaviours cannot be resolved from `PRD.md`
+* a required external dependency cannot be used
+* proceeding would weaken a stated security boundary
+
+For minor choices:
+
+1. Choose the simplest correct implementation.
+2. Document the assumption.
+3. Continue.
+
+Do not stop after writing plans.
+
+After each accepted OpenSpec proposal, implement the corresponding tasks and validate them.
+
+Do not claim completion based on file creation alone.
+
+Completion requires passing behaviour and tests.
+
+# 29. Final verification checklist
+
+Before declaring QueryForge implemented, verify all of the following:
+
+* `PRD.md` has been fully addressed or each deferred item is documented.
+* All OpenSpec changes are complete and archived according to the installed workflow.
+* ForgeSQL and ForgeDash do not import or call one another.
+* Generated SQL cannot bypass validation.
+* Query execution cannot accept unvalidated SQL.
+* The analytics database role is read-only.
+* The function policy is deny-by-default.
+* Recursive AST validation is tested.
+* Risky queries receive preflight.
+* The five verified metrics are grain-safe.
+* Metric versions are immutable.
+* Dashboard versions pin metrics.
+* One repair attempt is enforced.
+* Unsafe SQL execution count is zero.
+* Answer claim grounding is 100%.
+* Evals contain development and held-out sets.
+* No held-out examples appear in prompts.
+* The static dashboard loads without an LLM call.
+* Partial widget failures are handled.
+* Every run produces a trace.
+* Traces redact sensitive values.
+* Model usage is recorded.
+* Local setup works from clean checkout.
+* Tests, linting, typing, builds, and evals pass.
+* Documentation matches the implementation.
+
+# 30. Required final response
+
+When the implementation is complete, provide a concise engineering report containing:
+
+1. What was implemented
+2. Architecture overview
+3. OpenSpec changes created and archived
+4. Key safety controls
+5. Test results
+6. Evaluation results
+7. Latency and model-usage results
+8. Commands for local execution
+9. Remaining deferred production concerns
+10. Exact files that should be reviewed first
+
+Do not state that the project is complete when acceptance criteria are failing.
+
+Begin now by:
+
+1. Reading `PRD.md` completely.
+2. Inspecting the repository.
+3. Inspecting OpenSpec and Sembler.
+4. Creating the repository architecture map.
+5. Creating the first OpenSpec proposal.
+6. Implementing the project phase by phase.
