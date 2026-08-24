@@ -9,6 +9,8 @@ dependencies = [
     "pydantic>=2.11.7",
     "psycopg[binary]>=3.2.13",
     "sqlglot>=27.9.0",
+    "langgraph>=1.2.11",
+    "langfuse>=4.14.4",
 ]
 
 [dependency-groups]

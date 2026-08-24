@@ -12,10 +12,10 @@ Both tools should eventually share the same foundation for LLM providers, databa
 Current scope is intentionally smaller: a local Ask Data NL2SQL CLI backed by Postgres.
 
 ```text
-question -> intent policy -> LLM provider -> candidate SQL -> SQL policy decision -> read-only Postgres executor -> result JSON
+question -> LangGraph AskDataGraph -> intent policy -> LLM provider -> candidate SQL -> SQL policy decision -> read-only Postgres executor -> trace + result JSON
 ```
 
-There is no frontend, public API, dashboard generation, persistent memory, multi-database support, LangGraph workflow, eval harness, or governance system yet.
+There is no frontend, public API, dashboard generation, persistent memory, multi-database support, eval harness, or governance system yet.
 
 ## Local Setup
 
@@ -35,6 +35,11 @@ QUERYFORGE_LLM_PROVIDER=groq
 QUERYFORGE_LLM_MODEL=openai/gpt-oss-20b
 QUERYFORGE_DATABASE_OWNER_URL=postgresql://queryforge:queryforge@localhost:55432/queryforge?connect_timeout=5
 QUERYFORGE_QUERY_DATABASE_URL=postgresql://queryforge_readonly:queryforge_readonly@localhost:55432/queryforge?connect_timeout=5
+QUERYFORGE_OBSERVABILITY_PROVIDER=
+LANGFUSE_PUBLIC_KEY=your-langfuse-public-key
+LANGFUSE_SECRET_KEY=your-langfuse-secret-key
+LANGFUSE_BASE_URL=https://cloud.langfuse.com
+QUERYFORGE_TRACE_PREVIEW_ROWS=5
 ```
 
 Do not commit `.env` or any real API key to git or GitHub. Only `.env.example` with placeholder values should be committed.
@@ -45,6 +50,19 @@ Shell environment variables still work and take precedence over `.env`:
 $env:GROQ_API_KEY = "your-groq-api-key"
 $env:QUERYFORGE_LLM_MODEL = "openai/gpt-oss-20b"
 ```
+
+## Ask Data Observability
+
+Ask Data now runs through `AskDataGraph`, a small LangGraph workflow with explicit stages for intent policy, provider resolution, LLM SQL generation, SQL validation, query execution, answer rendering, and final result assembly.
+
+Every `queryforge ask` response includes:
+
+- `trace_id`: a stable diagnostic identity for that run.
+- `trace`: a bounded local timeline with step names, statuses, timings, policy metadata, generated SQL when available, normalized SQL when available, row count, preview rows, and errors.
+
+Langfuse export is optional. If `QUERYFORGE_OBSERVABILITY_PROVIDER` is unset or Langfuse keys are missing, QueryForge still returns local trace metadata and uses a no-op exporter. If Langfuse export fails, the query result keeps its real status and the export failure is recorded in the trace.
+
+Observability is diagnostic only. It cannot approve SQL generation, bypass intent or SQL policy, or authorize database execution.
 
 ## Database Roles
 
@@ -107,9 +125,9 @@ CLI result statuses:
 - `invalid`: SQL could not be parsed.
 - `error`: provider or database execution failed.
 
-The CLI prints inspectable JSON with the original question, status, answer, intent-policy outcome,
-generated or normalized SQL when available, rows, row count, provider, model, validation status,
-SQL policy code, and SQL policy reason.
+The CLI prints inspectable JSON with the original question, trace identity, bounded trace timeline,
+status, answer, intent-policy outcome, generated or normalized SQL when available, rows, row count,
+provider, model, validation status, SQL policy code, and SQL policy reason.
 
 ## Product Direction
 
@@ -134,17 +152,17 @@ The intended staged path is:
 The active implementation change is:
 
 ```text
-add-intent-policy-guardrail-v1-1
+introduce-langgraph-langfuse-observability-v1
 ```
 
-Its scope stays limited to the local CLI guardrail layer: deterministic pre-LLM intent policy,
-structured intent results, preservation of SQL/execution guardrails, tests, and docs.
+Its scope stays limited to graph-based Ask Data orchestration, local run traces, optional Langfuse
+export, preservation of guardrail order, tests, and docs.
 
 ## Test
 
 ```bash
 uv run pytest
 uv run ruff check .
-openspec validate add-intent-policy-guardrail-v1-1 --strict
+openspec validate introduce-langgraph-langfuse-observability-v1 --strict
 openspec validate --all --strict
 ```

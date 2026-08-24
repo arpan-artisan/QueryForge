@@ -324,6 +324,69 @@ def test_agent_reports_missing_provider_only_after_allowed_intent() -> None:
     assert result.policy_reason == "Set GROQ_API_KEY"
 
 
+def test_agent_returns_trace_for_every_terminal_status() -> None:
+    cases = [
+        (
+            "ok",
+            "How many orders?",
+            NL2SQLAgent(
+                StubLLM("SELECT COUNT(*) AS order_count FROM orders"),
+                StubQueryTool(),  # type: ignore[arg-type]
+            ),
+        ),
+        (
+            "blocked",
+            "Drop the orders table",
+            NL2SQLAgent(
+                StubLLM("SELECT COUNT(*) AS order_count FROM orders"),
+                StubQueryTool(),  # type: ignore[arg-type]
+            ),
+        ),
+        (
+            "unsupported",
+            "What is the weather?",
+            NL2SQLAgent(
+                StubLLM("SELECT COUNT(*) AS order_count FROM orders"),
+                StubQueryTool(),  # type: ignore[arg-type]
+            ),
+        ),
+        (
+            "clarification_required",
+            "Show data",
+            NL2SQLAgent(
+                StubLLM("SELECT COUNT(*) AS order_count FROM orders"),
+                StubQueryTool(),  # type: ignore[arg-type]
+            ),
+        ),
+        (
+            "invalid",
+            "What is total revenue?",
+            NL2SQLAgent(StubLLM("SELECT FROM"), StubQueryTool()),  # type: ignore[arg-type]
+        ),
+        (
+            "error",
+            "What is revenue?",
+            NL2SQLAgent(
+                FailingLLM(LLMProviderError("provider unavailable")),
+                StubQueryTool(),  # type: ignore[arg-type]
+            ),
+        ),
+    ]
+
+    seen_trace_ids: set[str] = set()
+    for expected_status, question, agent in cases:
+        result = asyncio.run(agent.answer(question))
+
+        assert result.status == expected_status
+        assert result.trace_id.startswith("qf_")
+        assert result.trace is not None
+        assert result.trace.trace_id == result.trace_id
+        assert result.trace.status == expected_status
+        assert result.trace.steps[-1].name == "final_result"
+        assert result.trace_id not in seen_trace_ids
+        seen_trace_ids.add(result.trace_id)
+
+
 def test_render_rows_as_answer_includes_multi_row_values() -> None:
     rows = [
         {"product": "USB-C Dock", "revenue": 380.0},
