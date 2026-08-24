@@ -68,6 +68,7 @@ rules:
 
   tasks:
     - Keep tasks small enough to implement and verify independently.
+    - Every feature slice must include focused tests for its new success path, failure path, and important edge cases before it can be marked complete.
     - Tie tasks back to requirements when possible.
     - Include tests for safety-critical and error-path behavior.
     - Do not add frontend, API, dashboards, memory, evals, or multi-database support unless the proposal explicitly scopes them.
@@ -84,7 +85,8 @@ operations:
       - "Preserve SOLID-aligned module boundaries: providers generate candidates, policy validates, executors execute approved SQL, models define contracts, and the agent orchestrates."
       - Do not commit real secrets to git or GitHub; use ignored `.env` files, shell environment variables, or placeholder-only examples.
       - If implementation changes execution flow, core classes, result models, statuses, CLI commands, setup steps, or user-visible behavior, update `docs/architecture-diagrams.md` and verify the diagrams still match the code.
-      - Run focused tests plus Ruff before reporting completion.
+      - After each feature slice, add or update relevant test cases and run the focused tests for that slice before marking its task complete.
+      - Run focused tests, full pytest, Ruff, and strict OpenSpec validation before reporting completion.
   archive:
     guidance:
       - Archive only after tasks are complete, tests pass, and OpenSpec validates strictly.

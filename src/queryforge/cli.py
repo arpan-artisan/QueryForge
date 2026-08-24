@@ -4,18 +4,13 @@ import asyncio
 import psycopg
 
 from queryforge.agent import NL2SQLAgent
-from queryforge.llm import LLMNotConfiguredError, create_llm_provider
+from queryforge.llm import create_llm_provider
 from queryforge.postgres import DEFAULT_DATABASE_OWNER_URL, init_database
 from queryforge.tools import QueryExecutorTool
 
 
 async def ask(question: str) -> None:
-    try:
-        llm = create_llm_provider()
-    except LLMNotConfiguredError as exc:
-        raise SystemExit(str(exc)) from exc
-
-    agent = NL2SQLAgent(llm, QueryExecutorTool())
+    agent = NL2SQLAgent.from_provider_factory(create_llm_provider, QueryExecutorTool())
     response = await agent.answer(question)
     print(response.model_dump_json(indent=2))
 

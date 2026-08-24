@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import psycopg
 
-from queryforge.llm import LLMProvider, LLMProviderError, LLMUnsupportedQuestionError
-from queryforge.models import AgentResult, SQLPolicyDecision, SQLPolicyStatus
+from queryforge.intent_policy import evaluate_intent_policy
+from queryforge.llm import (
+    LLMNotConfiguredError,
+    LLMProvider,
+    LLMProviderError,
+    LLMUnsupportedQuestionError,
+)
+from queryforge.models import AgentResult, IntentPolicyDecision, SQLPolicyDecision, SQLPolicyStatus
 from queryforge.schema import SCHEMA_CONTEXT
 from queryforge.sql_safety import SQLSafetyError, evaluate_sql_policy
 from queryforge.tools import QueryExecutorTool
@@ -12,20 +20,61 @@ MAX_ANSWER_PREVIEW_ROWS = 5
 
 
 class NL2SQLAgent:
-    def __init__(self, llm: LLMProvider, query_tool: QueryExecutorTool) -> None:
-        self.llm = llm
+    def __init__(
+        self,
+        llm: LLMProvider | None,
+        query_tool: QueryExecutorTool,
+        llm_factory: Callable[[], LLMProvider] | None = None,
+    ) -> None:
+        if llm is None and llm_factory is None:
+            raise ValueError("NL2SQLAgent requires an LLM provider or provider factory.")
+        self.llm: LLMProvider | None = llm
+        self._llm_factory = llm_factory
         self.query_tool = query_tool
 
+    @classmethod
+    def from_provider_factory(
+        cls,
+        llm_factory: Callable[[], LLMProvider],
+        query_tool: QueryExecutorTool,
+    ) -> NL2SQLAgent:
+        return cls(None, query_tool, llm_factory=llm_factory)
+
     async def answer(self, question: str) -> AgentResult:
+        intent_decision = evaluate_intent_policy(question)
+        if intent_decision.status != "allowed":
+            return _intent_failure_result(question, intent_decision)
+
         try:
-            generated_sql = await self.llm.generate_sql(question, SCHEMA_CONTEXT)
+            llm = self._resolve_llm()
+        except LLMNotConfiguredError as exc:
+            return AgentResult(
+                question=question,
+                status="error",
+                answer=f"LLM is not configured: {exc}",
+                provider="not_configured",
+                model="not_configured",
+                intent_status=intent_decision.status,
+                intent_policy_code=intent_decision.code,
+                intent_policy_reason=intent_decision.reason,
+                intent_category=intent_decision.category,
+                policy_code="llm_not_configured",
+                policy_reason=str(exc),
+            )
+
+        try:
+            generated_sql = await llm.generate_sql(question, SCHEMA_CONTEXT)
         except LLMUnsupportedQuestionError as exc:
             return AgentResult(
                 question=question,
                 status="unsupported",
                 answer=f"Unsupported question: {exc}",
-                provider=self.llm.provider_name,
-                model=self.llm.model_name,
+                provider=llm.provider_name,
+                model=llm.model_name,
+                intent_status=intent_decision.status,
+                intent_policy_code=intent_decision.code,
+                intent_policy_reason=intent_decision.reason,
+                intent_category=intent_decision.category,
                 validation_status="unsupported",
                 policy_code="provider_unsupported",
                 policy_reason=str(exc),
@@ -35,8 +84,12 @@ class NL2SQLAgent:
                 question=question,
                 status="error",
                 answer=f"LLM failed: {exc}",
-                provider=self.llm.provider_name,
-                model=self.llm.model_name,
+                provider=llm.provider_name,
+                model=llm.model_name,
+                intent_status=intent_decision.status,
+                intent_policy_code=intent_decision.code,
+                intent_policy_reason=intent_decision.reason,
+                intent_category=intent_decision.category,
                 policy_code="llm_provider_error",
                 policy_reason=str(exc),
             )
@@ -46,8 +99,9 @@ class NL2SQLAgent:
             return _policy_failure_result(
                 question=question,
                 decision=decision,
-                provider=self.llm.provider_name,
-                model=self.llm.model_name,
+                provider=llm.provider_name,
+                model=llm.model_name,
+                intent_decision=intent_decision,
             )
 
         try:
@@ -57,8 +111,9 @@ class NL2SQLAgent:
             return _execution_failure_result(
                 question=question,
                 sql=generated_sql,
-                provider=self.llm.provider_name,
-                model=self.llm.model_name,
+                provider=llm.provider_name,
+                model=llm.model_name,
+                intent_decision=intent_decision,
                 validation_status=failure_decision.status,
                 policy_code=failure_decision.code,
                 policy_reason=failure_decision.reason,
@@ -68,8 +123,9 @@ class NL2SQLAgent:
             return _execution_failure_result(
                 question=question,
                 sql=decision.normalized_sql or generated_sql,
-                provider=self.llm.provider_name,
-                model=self.llm.model_name,
+                provider=llm.provider_name,
+                model=llm.model_name,
+                intent_decision=intent_decision,
                 validation_status=decision.status,
                 policy_code="database_execution_error",
                 policy_reason=str(exc),
@@ -83,12 +139,24 @@ class NL2SQLAgent:
             sql=tool_result.sql,
             rows=tool_result.rows,
             row_count=tool_result.row_count,
-            provider=self.llm.provider_name,
-            model=self.llm.model_name,
+            provider=llm.provider_name,
+            model=llm.model_name,
+            intent_status=intent_decision.status,
+            intent_policy_code=intent_decision.code,
+            intent_policy_reason=intent_decision.reason,
+            intent_category=intent_decision.category,
             validation_status=decision.status,
             policy_code=decision.code,
             policy_reason=decision.reason,
         )
+
+    def _resolve_llm(self) -> LLMProvider:
+        if self.llm is not None:
+            return self.llm
+        if self._llm_factory is None:
+            raise LLMNotConfiguredError("No LLM provider factory is configured.")
+        self.llm = self._llm_factory()
+        return self.llm
 
 
 def render_rows_as_answer(question: str, rows: list[dict[str, object]]) -> str:
@@ -127,6 +195,7 @@ def _policy_failure_result(
     decision: SQLPolicyDecision,
     provider: str,
     model: str,
+    intent_decision: IntentPolicyDecision,
 ) -> AgentResult:
     answer_prefix = {
         "blocked": "Blocked by policy",
@@ -140,6 +209,10 @@ def _policy_failure_result(
         sql=decision.original_sql,
         provider=provider,
         model=model,
+        intent_status=intent_decision.status,
+        intent_policy_code=intent_decision.code,
+        intent_policy_reason=intent_decision.reason,
+        intent_category=intent_decision.category,
         validation_status=decision.status,
         policy_code=decision.code,
         policy_reason=decision.reason,
@@ -151,6 +224,7 @@ def _execution_failure_result(
     sql: str,
     provider: str,
     model: str,
+    intent_decision: IntentPolicyDecision,
     validation_status: SQLPolicyStatus,
     policy_code: str,
     policy_reason: str,
@@ -163,7 +237,30 @@ def _execution_failure_result(
         sql=sql,
         provider=provider,
         model=model,
+        intent_status=intent_decision.status,
+        intent_policy_code=intent_decision.code,
+        intent_policy_reason=intent_decision.reason,
+        intent_category=intent_decision.category,
         validation_status=validation_status,
         policy_code=policy_code,
         policy_reason=policy_reason,
+    )
+
+
+def _intent_failure_result(question: str, decision: IntentPolicyDecision) -> AgentResult:
+    answer_prefix = {
+        "blocked": "Blocked by intent policy",
+        "unsupported": "Unsupported question",
+        "clarification_required": "Clarification required",
+    }[decision.status]
+    return AgentResult(
+        question=question,
+        status=decision.status,
+        answer=f"{answer_prefix}: {decision.reason}",
+        provider="not_called",
+        model="not_called",
+        intent_status=decision.status,
+        intent_policy_code=decision.code,
+        intent_policy_reason=decision.reason,
+        intent_category=decision.category,
     )

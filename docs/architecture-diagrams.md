@@ -11,16 +11,24 @@ flowchart TD
     user["User runs: queryforge ask <question>"] --> cli_main["cli.main()"]
     cli_main --> cli_ask["cli.ask(question)"]
 
-    cli_ask --> provider_factory["create_llm_provider()"]
+    cli_ask --> tool["QueryExecutorTool()"]
+    tool --> query_url["get_database_url() read-only execution URL"]
+    cli_ask --> agent["NL2SQLAgent.from_provider_factory(create_llm_provider, query_tool)"]
+
+    agent --> intent["evaluate_intent_policy(question)"]
+    intent --> intent_decision{"IntentPolicyDecision.status"}
+
+    intent_decision -- blocked --> intent_blocked["AgentResult status: blocked with intent code and reason"]
+    intent_decision -- unsupported --> intent_unsupported["AgentResult status: unsupported with intent code and reason"]
+    intent_decision -- clarification_required --> clarify["AgentResult status: clarification_required with clarification reason"]
+
+    intent_decision -- allowed --> provider_factory["create_llm_provider()"]
     provider_factory --> dotenv["load_dotenv()"]
     dotenv --> provider_config["Read provider, model, and GROQ_API_KEY"]
     provider_config --> llm["LLMProvider implementation"]
+    provider_factory -. missing provider config .-> provider_config_error["AgentResult status: error"]
 
-    cli_ask --> tool["QueryExecutorTool()"]
-    tool --> query_url["get_database_url() read-only execution URL"]
-    cli_ask --> agent["NL2SQLAgent(llm, query_tool)"]
-
-    agent --> schema["SCHEMA_CONTEXT"]
+    provider_config --> schema["SCHEMA_CONTEXT"]
     schema --> llm_call["llm.generate_sql(question, schema_context)"]
     llm --> llm_call
     llm_call --> candidate_sql["Candidate SQL text"]
@@ -50,9 +58,13 @@ flowchart TD
     sql_execute -. timeout or database error .-> db_error["AgentResult status: error"]
 
     ok_result --> json["Print AgentResult JSON"]
+    intent_blocked --> json
+    intent_unsupported --> json
+    clarify --> json
     blocked_result --> json
     unsupported_result --> json
     invalid_result --> json
+    provider_config_error --> json
     provider_unsupported --> json
     llm_error --> json
     validation_error --> json
@@ -84,8 +96,10 @@ classDiagram
     }
 
     class NL2SQLAgent {
-        +LLMProvider llm
+        +LLMProvider? llm
+        +LLMProviderFactory? llm_factory
         +QueryExecutorTool query_tool
+        +from_provider_factory(llm_factory, query_tool) NL2SQLAgent
         +answer(question) AgentResult
     }
 
@@ -100,6 +114,17 @@ classDiagram
         +str reason
         +str original_sql
         +str? normalized_sql
+    }
+
+    class IntentPolicyDecision {
+        +IntentPolicyStatus status
+        +str code
+        +str reason
+        +IntentPolicyCategory category
+    }
+
+    class IntentPolicy {
+        +evaluate_intent_policy(question) IntentPolicyDecision
     }
 
     class SQLSafety {
@@ -124,6 +149,10 @@ classDiagram
         +int row_count
         +str provider
         +str model
+        +IntentPolicyStatus? intent_status
+        +str? intent_policy_code
+        +str? intent_policy_reason
+        +IntentPolicyCategory? intent_category
         +SQLPolicyStatus? validation_status
         +str? policy_code
         +str? policy_reason
@@ -149,12 +178,15 @@ classDiagram
     OpenAICompatibleLLMProvider <|-- GroqLLMProvider
     NL2SQLAgent --> LLMProvider
     NL2SQLAgent --> QueryExecutorTool
+    NL2SQLAgent --> IntentPolicy
+    NL2SQLAgent --> IntentPolicyDecision
     NL2SQLAgent --> SQLSafety
     NL2SQLAgent --> AgentResult
     QueryExecutorTool --> SQLSafety
     QueryExecutorTool --> SQLPolicyDecision
     QueryExecutorTool --> QueryToolResult
     QueryExecutorTool --> PostgresConfig
+    IntentPolicy --> IntentPolicyDecision
     SQLSafety --> SQLPolicyDecision
     SQLSafety --> SchemaPolicy
     OpenAICompatibleLLMProvider --> DotenvConfig
@@ -173,18 +205,21 @@ flowchart TD
     init_db --> ask["Run uv run queryforge ask \"What is total revenue?\""]
 
     init_db -. owner URL wrong or Docker down .-> setup_error["CLI setup error with owner URL guidance"]
-    ask -. missing Groq key .-> credential_error["CLI exits with provider configuration error"]
+    ask -. allowed intent but missing Groq key .-> credential_error["CLI prints error JSON with provider not_configured"]
 
     ask --> status{"What status comes back?"}
-    status -- ok --> success["User sees question, answer, SQL, rows, row_count, provider, model, validation status, policy code, and policy reason"]
-    status -- blocked --> blocked["User sees original question, generated SQL, blocked status, and safety policy reason"]
-    status -- unsupported --> unsupported["User sees original question, unsupported status, and schema/provider reason"]
+    status -- ok --> success["User sees question, answer, SQL, rows, row_count, provider, model, intent status, validation status, and policy reasons"]
+    status -- blocked --> blocked["User sees original question, blocked status, intent or SQL policy reason, and no LLM/DB call when intent-blocked"]
+    status -- unsupported --> unsupported["User sees original question, unsupported status, and intent, schema, or provider reason"]
+    status -- clarification_required --> clarification["User sees original question and the missing metric, dimension, entity, time range, or scope"]
     status -- invalid --> invalid["User sees original question, generated SQL, invalid status, and parse reason"]
     status -- error --> error["User sees original question and provider, validation, timeout, or database failure reason"]
 
     success --> next_question["Ask another question"]
-    blocked --> revise["Revise the question or inspect generated SQL"]
+    blocked --> revise["Revise the question or inspect generated SQL when SQL exists"]
     unsupported --> revise
+    clarification --> clarify_question["Add the missing metric, dimension, entity, time range, or scope"]
+    clarify_question --> ask
     invalid --> revise
     error --> fix_setup["Fix .env, provider, Docker, or database setup"]
     credential_error --> fix_setup
