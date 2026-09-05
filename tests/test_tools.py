@@ -8,14 +8,26 @@ from queryforge.sql_safety import SQLSafetyError
 from queryforge.tools import QueryExecutorTool
 
 
-def test_query_executor_validates_before_connecting() -> None:
+def test_query_executor_validates_before_connecting(monkeypatch: pytest.MonkeyPatch) -> None:
+    readiness_calls: list[str] = []
     tool = QueryExecutorTool(database_url="postgresql://invalid-host.invalid/queryforge")
+
+    monkeypatch.setattr(
+        tools,
+        "require_demo_database_ready",
+        lambda database_url: readiness_calls.append(database_url),
+    )
 
     with pytest.raises(SQLSafetyError):
         tool.run("DROP TABLE orders")
 
+    assert readiness_calls == []
 
-def test_query_executor_revalidates_policy_decision_before_connecting() -> None:
+
+def test_query_executor_revalidates_policy_decision_before_connecting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    readiness_calls: list[str] = []
     tool = QueryExecutorTool(database_url="postgresql://invalid-host.invalid/queryforge")
     decision = SQLPolicyDecision(
         status="allowed",
@@ -25,12 +37,21 @@ def test_query_executor_revalidates_policy_decision_before_connecting() -> None:
         normalized_sql="DROP TABLE orders",
     )
 
+    monkeypatch.setattr(
+        tools,
+        "require_demo_database_ready",
+        lambda database_url: readiness_calls.append(database_url),
+    )
+
     with pytest.raises(SQLSafetyError):
         tool.run(decision)
+
+    assert readiness_calls == []
 
 
 def test_query_executor_sets_timeout_before_validated_sql(monkeypatch: pytest.MonkeyPatch) -> None:
     executed_sql: list[str] = []
+    readiness_calls: list[str] = []
 
     class FakeCursor:
         def __enter__(self) -> Self:
@@ -61,6 +82,11 @@ def test_query_executor_sets_timeout_before_validated_sql(monkeypatch: pytest.Mo
         return FakeConnection()
 
     monkeypatch.setattr(tools.psycopg, "connect", fake_connect)
+    monkeypatch.setattr(
+        tools,
+        "require_demo_database_ready",
+        lambda database_url: readiness_calls.append(database_url),
+    )
 
     result = QueryExecutorTool(database_url="postgresql://test/queryforge").run(
         "SELECT id FROM orders"
@@ -70,5 +96,6 @@ def test_query_executor_sets_timeout_before_validated_sql(monkeypatch: pytest.Mo
         "SET statement_timeout = '5s'",
         "SELECT id FROM orders LIMIT 100",
     ]
+    assert readiness_calls == ["postgresql://test/queryforge"]
     assert result.rows == [{"id": 1}]
     assert result.row_count == 1

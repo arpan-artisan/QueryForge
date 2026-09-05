@@ -19,10 +19,12 @@ def test_allowed_decision_contains_normalized_sql() -> None:
 @pytest.mark.parametrize(
     "sql",
     [
-        "SELECT id, name FROM customers",
-        "SELECT id, name, category, unit_price FROM products",
-        "SELECT id, customer_id, order_date, status FROM orders",
+        "SELECT id, name, created_at, region, segment FROM customers",
+        "SELECT id, name, description FROM categories",
+        "SELECT id, category_id, name, sku, unit_price, active FROM products",
+        "SELECT id, customer_id, order_date, status, channel FROM orders",
         "SELECT id, order_id, product_id, quantity, unit_price FROM order_items",
+        "SELECT id, order_id, payment_date, amount, method, status FROM payments",
         "SELECT id, order_id, refund_date, amount, reason FROM refunds",
     ],
 )
@@ -52,9 +54,39 @@ def test_allows_approved_analytical_functions(sql: str) -> None:
 
 
 @pytest.mark.parametrize(
+    "sql",
+    [
+        """
+        SELECT c.name AS category, SUM(oi.quantity * oi.unit_price) AS revenue
+        FROM orders o
+        JOIN order_items oi ON oi.order_id = o.id
+        JOIN products p ON p.id = oi.product_id
+        JOIN categories c ON c.id = p.category_id
+        WHERE o.status = 'completed'
+        GROUP BY c.name
+        ORDER BY revenue DESC
+        """,
+        """
+        SELECT
+            ROUND(
+                AVG(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) * 100,
+                2
+            ) AS payment_success_rate
+        FROM payments
+        """,
+    ],
+)
+def test_allows_category_and_payment_analytics(sql: str) -> None:
+    decision = evaluate_sql_policy(sql)
+
+    assert decision.status == "allowed"
+
+
+@pytest.mark.parametrize(
     ("sql", "code"),
     [
         ("SELECT id FROM invoices", "unknown_table"),
+        ("SELECT email FROM customers", "unknown_column"),
         ("SELECT password_hash FROM customers", "unknown_column"),
         ("SELECT x.id FROM orders AS o", "unknown_alias"),
         ("SELECT id FROM analytics.orders", "unknown_schema"),

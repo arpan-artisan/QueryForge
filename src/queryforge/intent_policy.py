@@ -21,6 +21,11 @@ ANALYTICAL_METRIC_TERMS = (
     "refund amount",
     "refund total",
     "refund rate",
+    "payment amount",
+    "payment total",
+    "payment success rate",
+    "successful payments",
+    "failed payments",
     "average order value",
     "aov",
     "count",
@@ -42,6 +47,9 @@ BUSINESS_TERMS = (
     "order items",
     "refund",
     "refunds",
+    "payment",
+    "payments",
+    "payment method",
     "revenue",
     "sales",
     "status",
@@ -51,6 +59,8 @@ DIMENSION_TERMS = (
     "by category",
     "by customer",
     "by status",
+    "by channel",
+    "by payment method",
     "by date",
     "by day",
     "by week",
@@ -59,6 +69,8 @@ DIMENSION_TERMS = (
     "per category",
     "per customer",
     "per status",
+    "per channel",
+    "per payment method",
     "per day",
     "per week",
     "per month",
@@ -77,13 +89,18 @@ TREND_TERMS = (
 )
 RANKING_TERMS = ("top", "highest", "lowest", "best", "worst", "rank", "ranking")
 COMPARISON_TERMS = ("compare", "comparison", " versus ", " vs ", "against")
-LOOKUP_TERMS = ("order id", "order number", "customer id", "product id", "refund id")
+LOOKUP_TERMS = (
+    "order id",
+    "order number",
+    "customer id",
+    "product id",
+    "refund id",
+    "payment id",
+)
 
 UNAVAILABLE_DATA_TERMS = (
     "invoice",
     "invoices",
-    "payment",
-    "payments",
     "shipment",
     "shipments",
     "inventory",
@@ -143,10 +160,10 @@ BYPASS_PATTERNS = (
     r"\bgenerate\s+sql\s+.*\b(delete|drop|truncate|update|insert|alter|grant|revoke)\b",
 )
 DESTRUCTIVE_PATTERNS = (
-    r"\b(drop|truncate)\s+(the\s+)?(table|database|schema|orders?|customers?|products?|refunds?)\b",
-    r"\bdelete\s+(from|all|rows?|records?|orders?|customers?|products?|refunds?)\b",
-    r"\bremove\s+(rows?|records?|orders?|customers?|products?|refunds?)\b",
-    r"\b(update|insert|alter|create)\s+(table|row|rows|record|records|orders?|customers?|products?|refunds?)\b",
+    r"\b(drop|truncate)\s+(the\s+)?(table|database|schema|orders?|customers?|products?|payments?|refunds?)\b",
+    r"\bdelete\s+(from|all|rows?|records?|orders?|customers?|products?|payments?|refunds?)\b",
+    r"\bremove\s+(rows?|records?|orders?|customers?|products?|payments?|refunds?)\b",
+    r"\b(update|insert|alter|create)\s+(table|row|rows|record|records|orders?|customers?|products?|payments?|refunds?)\b",
     r"\bgrant\s+",
     r"\brevoke\s+",
     r"\block\s+(table|rows?|records?)\b",
@@ -156,7 +173,7 @@ DESTRUCTIVE_PATTERNS = (
     r"\bmutate\s+(data|database|rows?|records?)\b",
     r"\bmodify\s+(data|database|rows?|records?)\b",
     r"\bwrite\s+to\s+(the\s+)?(database|table)\b",
-    r"\bchange\s+(order|orders|customer|customers|product|products|refund|refunds)\b",
+    r"\bchange\s+(order|orders|customer|customers|product|products|payment|payments|refund|refunds)\b",
 )
 SENSITIVE_PATTERNS = (
     r"\b(customer|customers).*\b(email|emails|email addresses|records?|raw data|personal data|pii)\b",
@@ -192,8 +209,8 @@ ADMINISTRATIVE_PATTERNS = (
 RESOURCE_ABUSE_PATTERNS = (
     r"\bshow\s+everything\b",
     r"\blist\s+everything\b",
-    r"\bshow\s+all\s+(rows?|records?|orders?|customers?|products?|refunds?|tables?)\b",
-    r"\blist\s+all\s+(rows?|records?|orders?|customers?|products?|refunds?|tables?)\b",
+    r"\bshow\s+all\s+(rows?|records?|orders?|customers?|products?|payments?|refunds?|tables?)\b",
+    r"\blist\s+all\s+(rows?|records?|orders?|customers?|products?|payments?|refunds?|tables?)\b",
     r"\b(all|entire|whole)\s+(database|table|dataset)\b",
     r"\bdump\s+(database|table|all|everything)\b",
     r"\bno\s+limit\b",
@@ -206,7 +223,7 @@ RESOURCE_ABUSE_PATTERNS = (
 )
 CLARIFICATION_BROAD_PATTERNS = (
     r"^(show|list|get|give me|display)\s+(data|records|rows)$",
-    r"^(show|list|get|give me|display)\s+(orders|products|refunds|order items)$",
+    r"^(show|list|get|give me|display)\s+(orders|products|payments|refunds|order items)$",
     r"^(show|list|get|give me|display)\s+(the\s+)?data\b",
 )
 
@@ -364,7 +381,16 @@ def _clarification_decision(normalized: str) -> IntentPolicyDecision | None:
             "clarify_multiple_interpretations",
             "The request has multiple safe interpretations; specify what to compare or group by.",
         )
-    if normalized in {"data", "sales", "revenue", "orders", "customers", "products", "refunds"}:
+    if normalized in {
+        "data",
+        "sales",
+        "revenue",
+        "orders",
+        "customers",
+        "products",
+        "payments",
+        "refunds",
+    }:
         return _decision(
             "clarification_required",
             "clarification_required",
@@ -470,7 +496,10 @@ def _is_bounded_lookup(normalized: str) -> bool:
         return True
     if _matches_any(normalized, (r"\border\s+\d+\b", r"\bcustomer\s+\d+\b", r"\bproduct\s+\d+\b")):
         return True
-    return _matches_any(normalized, (r"\bfor\s+(customer|product|category|status)\s+[\w'-]+\b",))
+    return _matches_any(
+        normalized,
+        (r"\bfor\s+(customer|product|category|status|payment method|channel)\s+[\w'-]+\b",),
+    )
 
 
 def _has_dimension_without_metric(normalized: str) -> bool:
@@ -479,8 +508,8 @@ def _has_dimension_without_metric(normalized: str) -> bool:
     return _contains_any(normalized, DIMENSION_TERMS) or _matches_any(
         normalized,
         (
-            r"^(by|per)\s+(product|category|customer|status|day|week|month)$",
-            r"\b(product|category|customer|status)\s+performance\b",
+            r"^(by|per)\s+(product|category|customer|status|channel|payment method|day|week|month)$",
+            r"\b(product|category|customer|status|channel|payment method)\s+performance\b",
         ),
     )
 
@@ -500,7 +529,10 @@ def _has_unclear_time_range(normalized: str) -> bool:
 def _has_ambiguous_entity(normalized: str) -> bool:
     if not _has_metric_or_business_count(normalized):
         return False
-    if _matches_any(normalized, (r"\bfor\s+(customer|product|category|status|order|refund)\b",)):
+    if _matches_any(
+        normalized,
+        (r"\bfor\s+(customer|product|category|status|channel|payment method|order|payment|refund)\b",),
+    ):
         return False
     return _matches_any(normalized, (r"\bfor\s+[a-z][\w'-]*\b",))
 

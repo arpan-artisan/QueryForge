@@ -1,12 +1,13 @@
 import argparse
 import asyncio
+import json
 
 import psycopg
 
 from queryforge.agent import NL2SQLAgent
 from queryforge.llm import create_llm_provider
 from queryforge.observability import create_trace_exporter, load_observability_config
-from queryforge.postgres import DEFAULT_DATABASE_OWNER_URL, init_database
+from queryforge.postgres import DEFAULT_DATABASE_OWNER_URL, check_demo_database_ready, init_database
 from queryforge.tools import QueryExecutorTool
 
 
@@ -26,7 +27,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="QueryForge local commands.")
     subparsers = parser.add_subparsers(dest="command")
 
-    subparsers.add_parser("init-db", help="Create and seed the local Postgres database.")
+    subparsers.add_parser("init-db", help="Reset, create, seed, and verify the local demo database.")
+    subparsers.add_parser("check-db", help="Check whether the local demo database is ready.")
 
     ask_parser = subparsers.add_parser("ask", help="Ask the NL2SQL agent a question.")
     ask_parser.add_argument("question", nargs="+", help="Question to ask.")
@@ -35,7 +37,7 @@ def main() -> None:
 
     if args.command == "init-db":
         try:
-            init_database()
+            readiness = init_database()
         except psycopg.OperationalError as exc:
             raise SystemExit(
                 "Could not connect to Postgres.\n"
@@ -44,7 +46,16 @@ def main() -> None:
                 "Or set QUERYFORGE_DATABASE_OWNER_URL to your own Postgres owner URL.\n"
                 f"Original error: {exc}"
             ) from exc
-        print("Postgres schema and seed data are ready.")
+        _print_readiness(readiness)
+        if not readiness.ready:
+            raise SystemExit(1)
+        return
+
+    if args.command == "check-db":
+        readiness = check_demo_database_ready()
+        _print_readiness(readiness)
+        if not readiness.ready:
+            raise SystemExit(1)
         return
 
     if args.command == "ask":
@@ -52,6 +63,10 @@ def main() -> None:
         return
 
     parser.print_help()
+
+
+def _print_readiness(readiness) -> None:
+    print(json.dumps(readiness.to_dict(), indent=2))
 
 
 if __name__ == "__main__":

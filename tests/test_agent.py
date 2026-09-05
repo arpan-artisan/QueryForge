@@ -35,13 +35,14 @@ class FailingLLM:
 
 
 class StubQueryTool:
-    def __init__(self) -> None:
+    def __init__(self, rows: list[dict[str, object]] | None = None) -> None:
+        self.rows = rows or [{"total_revenue": 1345.0}]
         self.calls: list[str | SQLPolicyDecision] = []
 
     def run(self, sql: str | SQLPolicyDecision) -> QueryToolResult:
         self.calls.append(sql)
         executable_sql = sql.normalized_sql if isinstance(sql, SQLPolicyDecision) else sql
-        return QueryToolResult(sql=executable_sql or "", rows=[{"total_revenue": 1345.0}], row_count=1)
+        return QueryToolResult(sql=executable_sql or "", rows=self.rows, row_count=len(self.rows))
 
 
 class FailingQueryTool:
@@ -193,6 +194,56 @@ def test_agent_returns_error_when_query_execution_fails() -> None:
     assert result.validation_status == "allowed"
     assert result.policy_code == "database_execution_error"
     assert result.policy_reason == "database unavailable"
+
+
+@pytest.mark.parametrize(
+    ("question", "sql", "rows", "expected_answer"),
+    [
+        (
+            "Show revenue by category",
+            """
+            SELECT c.name AS category, ROUND(SUM(oi.quantity * oi.unit_price), 2) AS revenue
+            FROM orders o
+            JOIN order_items oi ON oi.order_id = o.id
+            JOIN products p ON p.id = oi.product_id
+            JOIN categories c ON c.id = p.category_id
+            WHERE o.status = 'completed'
+            GROUP BY c.name
+            ORDER BY revenue DESC
+            """,
+            [{"category": "Accessories", "revenue": 740.0}],
+            "Category: Accessories, Revenue: 740.0",
+        ),
+        (
+            "What is the payment success rate?",
+            """
+            SELECT ROUND(
+                AVG(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) * 100,
+                2
+            ) AS payment_success_rate
+            FROM payments
+            """,
+            [{"payment_success_rate": 80.0}],
+            "Payment Success Rate is 80.0.",
+        ),
+    ],
+)
+def test_agent_answers_category_and_payment_questions_with_stub_llm(
+    question: str,
+    sql: str,
+    rows: list[dict[str, object]],
+    expected_answer: str,
+) -> None:
+    agent = NL2SQLAgent(StubLLM(sql), StubQueryTool(rows=rows))  # type: ignore[arg-type]
+
+    result = asyncio.run(agent.answer(question))
+
+    assert result.status == "ok"
+    assert result.validation_status == "allowed"
+    assert result.rows == rows
+    assert result.row_count == len(rows)
+    assert result.trace_id.startswith("qf_")
+    assert expected_answer in result.answer
 
 
 def test_agent_blocks_destructive_intent_before_llm_or_tool_execution() -> None:

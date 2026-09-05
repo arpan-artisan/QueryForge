@@ -1,11 +1,13 @@
 import asyncio
 
 import psycopg
+import pytest
 
 from queryforge.ask_data_graph import AskDataGraph
 from queryforge.llm import LLMNotConfiguredError, LLMProviderError, LLMUnsupportedQuestionError
 from queryforge.models import QueryToolResult, SQLPolicyDecision
 from queryforge.observability import LocalTraceRecorder
+from queryforge.postgres import DemoDatabaseNotReadyError, DemoDatabaseReadiness
 
 
 class StubLLM:
@@ -56,6 +58,16 @@ class FailingQueryTool:
     def run(self, sql: str | SQLPolicyDecision) -> QueryToolResult:
         self.calls.append(sql)
         raise psycopg.OperationalError("database unavailable")
+
+
+class NotReadyQueryTool:
+    def __init__(self, readiness: DemoDatabaseReadiness) -> None:
+        self.readiness = readiness
+        self.calls: list[str | SQLPolicyDecision] = []
+
+    def run(self, sql: str | SQLPolicyDecision) -> QueryToolResult:
+        self.calls.append(sql)
+        raise DemoDatabaseNotReadyError(self.readiness)
 
 
 class FakeRecorder(LocalTraceRecorder):
@@ -386,6 +398,54 @@ def test_ask_data_graph_database_error_skips_answer_rendering() -> None:
     assert result.policy_code == "database_execution_error"
     assert query_tool.calls
     assert result.trace is not None
+    assert _step_status(result, "query_execution") == "error"
+    assert _step_status(result, "answer_rendering") == "skipped"
+
+
+@pytest.mark.parametrize(
+    "readiness",
+    [
+        DemoDatabaseReadiness(
+            ready=False,
+            reason=(
+                "Demo database schema does not match the expected contract "
+                "(missing tables: payments)."
+            ),
+            missing_tables=("payments",),
+        ),
+        DemoDatabaseReadiness(
+            ready=False,
+            reason="Demo database row counts do not match the expected deterministic seed.",
+            table_counts={"orders": 99},
+        ),
+        DemoDatabaseReadiness(
+            ready=False,
+            reason="Demo database facts do not match the expected deterministic seed.",
+            facts={"completed_revenue": "0.00"},
+        ),
+    ],
+)
+def test_ask_data_graph_database_readiness_error_skips_answer_rendering(
+    readiness: DemoDatabaseReadiness,
+) -> None:
+    llm = StubLLM("SELECT COUNT(*) AS order_count FROM orders")
+    query_tool = NotReadyQueryTool(readiness)
+    graph = AskDataGraph(llm_resolver=lambda: llm, query_tool=query_tool)  # type: ignore[arg-type]
+
+    result = asyncio.run(graph.run("How many orders?"))
+
+    assert result.status == "error"
+    assert result.answer.startswith("Demo database is not ready:")
+    assert result.policy_code == "demo_database_not_ready"
+    assert result.policy_reason == readiness.reason
+    assert result.rows == []
+    assert result.row_count == 0
+    assert query_tool.calls
+    assert result.trace is not None
+    execution_steps = [step for step in result.trace.steps if step.name == "query_execution"]
+    assert execution_steps
+    assert execution_steps[0].metadata["readiness"]["ready"] is False
+    assert "database_url" not in execution_steps[0].metadata["readiness"]
     assert _step_status(result, "query_execution") == "error"
     assert _step_status(result, "answer_rendering") == "skipped"
 

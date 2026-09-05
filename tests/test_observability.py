@@ -365,6 +365,30 @@ def test_local_trace_recorder_redacts_step_metadata_and_export_errors() -> None:
     assert trace.export_errors[0].message == REDACTED
 
 
+def test_local_trace_recorder_redacts_readiness_failure_metadata() -> None:
+    recorder = LocalTraceRecorder("What is total revenue?", trace_id="qf_db_not_ready")
+
+    recorder.record_step(
+        "query_execution",
+        "error",
+        metadata={
+            "policy_code": "demo_database_not_ready",
+            "readiness": {
+                "ready": False,
+                "reason": "stale data",
+                "database_url": "postgresql://user:password@localhost/queryforge",
+            },
+        },
+        error="postgresql://user:password@localhost/queryforge",
+    )
+    trace = recorder.finish("error")
+    encoded = trace.model_dump_json()
+
+    assert "password" not in encoded
+    assert trace.steps[0].metadata["readiness"]["database_url"] == REDACTED
+    assert trace.steps[0].error == REDACTED
+
+
 def test_noop_trace_recorder_keeps_local_trace_without_external_side_effects() -> None:
     recorder = NoOpTraceRecorder("What is total revenue?", trace_id="qf_noop")
 

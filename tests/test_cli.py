@@ -7,6 +7,7 @@ from queryforge import cli
 from queryforge.llm import LLMNotConfiguredError
 from queryforge.models import QueryToolResult, SQLPolicyDecision
 from queryforge.observability import NoOpTraceExporter, ObservabilityConfig
+from queryforge.postgres import DemoDatabaseReadiness
 
 
 class StubLLM:
@@ -182,6 +183,46 @@ def test_ask_command_prints_invalid_sql_json_with_validation_details(monkeypatch
     assert _step(payload, "llm_sql_generation")["metadata"]["generated_sql"] == "SELECT FROM"
     assert _step(payload, "sql_validation")["status"] == "invalid"
     assert _step(payload, "query_execution")["status"] == "skipped"
+
+
+def test_check_db_command_prints_ready_json(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        cli,
+        "check_demo_database_ready",
+        lambda: DemoDatabaseReadiness(
+            ready=True,
+            fingerprint="abc123",
+            reason="Demo database is ready.",
+            table_counts={"orders": 10},
+        ),
+    )
+    monkeypatch.setattr("sys.argv", ["queryforge", "check-db"])
+
+    cli.main()
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ready"] is True
+    assert payload["version"] == "queryforge-commerce-v1"
+    assert payload["fingerprint"] == "abc123"
+    assert payload["table_counts"] == {"orders": 10}
+
+
+def test_check_db_command_exits_nonzero_when_not_ready(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        cli,
+        "check_demo_database_ready",
+        lambda: DemoDatabaseReadiness(ready=False, reason="stale data"),
+    )
+    monkeypatch.setattr("sys.argv", ["queryforge", "check-db"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main()
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exc_info.value.code == 1
+    assert payload["ready"] is False
+    assert payload["reason"] == "stale data"
+    assert "postgresql://" not in payload["reason"]
 
 
 def _step(payload: dict[str, object], name: str) -> dict[str, object]:

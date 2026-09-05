@@ -1,21 +1,18 @@
 from __future__ import annotations
 
-APPROVED_SCHEMA_NAME = "public"
+from queryforge.demo_database import DEMO_QUERY_COLUMNS, DEMO_SCHEMA_NAME
 
-APPROVED_TABLES: dict[str, frozenset[str]] = {
-    "customers": frozenset({"id", "name", "email", "created_at"}),
-    "products": frozenset({"id", "name", "category", "unit_price"}),
-    "orders": frozenset({"id", "customer_id", "order_date", "status"}),
-    "order_items": frozenset({"id", "order_id", "product_id", "quantity", "unit_price"}),
-    "refunds": frozenset({"id", "order_id", "refund_date", "amount", "reason"}),
-}
+APPROVED_SCHEMA_NAME = DEMO_SCHEMA_NAME
+APPROVED_TABLES: dict[str, frozenset[str]] = DEMO_QUERY_COLUMNS
 
 APPROVED_FUNCTIONS = frozenset(
     {
         "avg",
+        "case",
         "coalesce",
         "count",
         "date_trunc",
+        "if",
         "max",
         "min",
         "round",

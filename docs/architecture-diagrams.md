@@ -2,7 +2,101 @@
 
 This is the living diagram page for QueryForge. Update it whenever an OpenSpec change alters the user flow, module boundaries, core classes, result models, statuses, setup steps, or execution path.
 
-Current scope: local CLI Ask Data flow for Postgres with LangGraph orchestration, bounded local traces, and optional Langfuse export.
+Current scope: local CLI Ask Data flow for a stabilized seven-table Postgres demo database with LangGraph orchestration, bounded local traces, optional Langfuse export, and execution-time demo database readiness checks.
+
+## Demo Schema
+
+```mermaid
+erDiagram
+    CUSTOMERS ||--o{ ORDERS : places
+    CATEGORIES ||--o{ PRODUCTS : groups
+    PRODUCTS ||--o{ ORDER_ITEMS : purchased_as
+    ORDERS ||--o{ ORDER_ITEMS : contains
+    ORDERS ||--o{ PAYMENTS : paid_by
+    ORDERS ||--o{ REFUNDS : refunded_by
+
+    CUSTOMERS {
+        int id PK
+        text name
+        text email
+        date created_at
+        text region
+        text segment
+    }
+
+    CATEGORIES {
+        int id PK
+        text name
+        text description
+    }
+
+    PRODUCTS {
+        int id PK
+        int category_id FK
+        text name
+        text sku
+        numeric unit_price
+        boolean active
+    }
+
+    ORDERS {
+        int id PK
+        int customer_id FK
+        date order_date
+        text status
+        text channel
+    }
+
+    ORDER_ITEMS {
+        int id PK
+        int order_id FK
+        int product_id FK
+        int quantity
+        numeric unit_price
+    }
+
+    PAYMENTS {
+        int id PK
+        int order_id FK
+        date payment_date
+        numeric amount
+        text method
+        text status
+    }
+
+    REFUNDS {
+        int id PK
+        int order_id FK
+        date refund_date
+        numeric amount
+        text reason
+    }
+```
+
+## Database Setup Flow
+
+```mermaid
+flowchart TD
+    init_cmd["User runs: uv run queryforge init-db"] --> owner_url["get_database_owner_url()"]
+    owner_url --> owner_conn["Connect with owner/init credentials"]
+    owner_conn --> schema_reset["Execute sql/schema.sql"]
+    schema_reset --> drop_existing["Drop existing public tables"]
+    drop_existing --> create_tables["Create seven demo tables, constraints, FKs, and indexes"]
+    create_tables --> grants["Create/update queryforge_readonly and grant SELECT"]
+    grants --> seed["Execute sql/seed.sql deterministic rows"]
+    seed --> readiness["check_demo_database_ready(read-only URL)"]
+    readiness --> shape["Verify exactly approved tables and columns"]
+    shape --> counts["Verify expected row counts"]
+    counts --> facts["Verify expected analytics facts"]
+    facts --> fingerprint["Compute deterministic fingerprint"]
+    fingerprint --> setup_json["Print readiness JSON"]
+
+    readiness -. Docker down, missing table, stale row, drifted fact .-> setup_fail["Exit non-zero with concise setup reason"]
+
+    check_cmd["User runs: uv run queryforge check-db"] --> readonly_check["check_demo_database_ready(read-only URL)"]
+    readonly_check --> setup_json
+    readonly_check -. not ready .-> setup_fail
+```
 
 ## Code Flow
 
@@ -56,12 +150,15 @@ flowchart TD
 
     execution_node --> execute["query_tool.run(SQLPolicyDecision)"]
     execute --> revalidate["evaluate_sql_policy(normalized_sql) again"]
-    revalidate --> readonly_pg["Postgres read-only role via psycopg"]
+    revalidate --> readiness_check["require_demo_database_ready(read-only URL)"]
+    readiness_check --> readiness_payload["Verify version, table shape, row counts, facts, and fingerprint"]
+    readiness_payload --> readonly_pg["Postgres read-only role via psycopg"]
     readonly_pg --> timeout["SET statement_timeout = '5s'"]
     timeout --> sql_execute["Execute normalized SELECT"]
     sql_execute --> rows["QueryToolResult rows + row_count"]
 
     revalidate -. policy mismatch .-> skip_execution["Record execution validation error and skipped answer rendering"]
+    readiness_check -. missing, stale, drifted, or unreachable DB .-> skip_execution
     sql_execute -. timeout or database error .-> skip_execution
 
     rows --> render_node["answer_rendering node"]
@@ -143,7 +240,43 @@ classDiagram
 
     class QueryExecutorTool {
         +str database_url
+        +bool check_readiness
         +run(sql_or_decision) QueryToolResult
+    }
+
+    class DemoDatabaseContract {
+        +str DEMO_DATASET_VERSION
+        +str DEMO_SCHEMA_NAME
+        +tuple DEMO_TABLES
+        +dict EXPECTED_ROW_COUNTS
+        +dict EXPECTED_FACTS
+        +str EXPECTED_DATASET_FINGERPRINT
+    }
+
+    class DemoDatabaseReadiness {
+        +bool ready
+        +str version
+        +str? fingerprint
+        +str expected_fingerprint
+        +str reason
+        +dict table_counts
+        +dict facts
+        +tuple missing_tables
+        +tuple extra_tables
+        +dict missing_columns
+        +to_dict() dict
+    }
+
+    class DemoDatabaseNotReadyError {
+        +DemoDatabaseReadiness readiness
+    }
+
+    class PostgresSupport {
+        +get_database_owner_url() str
+        +get_database_url() str
+        +init_database() DemoDatabaseReadiness
+        +check_demo_database_ready() DemoDatabaseReadiness
+        +require_demo_database_ready() DemoDatabaseReadiness
     }
 
     class TraceRecorder {
@@ -254,7 +387,11 @@ classDiagram
     AskDataGraph --> SQLSafety
     AskDataGraph --> AgentResult
     QueryExecutorTool --> SQLSafety
+    QueryExecutorTool --> PostgresSupport
     QueryExecutorTool --> QueryToolResult
+    PostgresSupport --> DemoDatabaseContract
+    PostgresSupport --> DemoDatabaseReadiness
+    DemoDatabaseNotReadyError --> DemoDatabaseReadiness
     LocalTraceRecorder ..|> TraceRecorder
     NoOpTraceRecorder --|> LocalTraceRecorder
     NoOpTraceExporter ..|> TraceExporter
@@ -278,10 +415,13 @@ flowchart TD
     no_obs --> db_start["Run docker compose up -d postgres"]
     obs_keys --> db_start
     db_start --> init_db["Run uv run queryforge init-db"]
-    init_db --> ask["Run uv run queryforge ask \"What is total revenue?\""]
+    init_db --> check_db["Run uv run queryforge check-db"]
+    check_db --> ask["Run uv run queryforge ask \"What is total revenue?\""]
 
     init_db -. owner URL wrong or Docker down .-> setup_error["CLI setup error with owner URL guidance"]
+    check_db -. missing, stale, or drifted demo data .-> setup_error["CLI readiness JSON with non-ready reason"]
     ask -. allowed intent but missing Groq key .-> credential_error["CLI prints error JSON with trace_id and provider not_configured"]
+    ask -. validated SQL but demo DB not ready .-> readiness_error["CLI prints error JSON with demo_database_not_ready policy code"]
 
     ask --> status{"What status comes back?"}
     status -- ok --> success["User sees question, trace_id, trace timeline, answer, SQL, rows, row_count, provider, model, intent status, validation status, and policy reasons"]
@@ -289,7 +429,7 @@ flowchart TD
     status -- unsupported --> unsupported["User sees original question, trace_id, unsupported status, and intent, schema, or provider reason"]
     status -- clarification_required --> clarification["User sees original question, trace_id, and the missing metric, dimension, entity, time range, or scope"]
     status -- invalid --> invalid["User sees original question, trace_id, generated SQL, invalid status, parse reason, and skipped query execution"]
-    status -- error --> error["User sees original question, trace_id, provider, validation, timeout, database, or observability export failure reason"]
+    status -- error --> error["User sees original question, trace_id, provider, validation, readiness, timeout, database, or observability export failure reason"]
 
     success --> next_question["Ask another question"]
     blocked --> revise["Revise the question or inspect generated SQL when SQL exists"]
@@ -298,6 +438,7 @@ flowchart TD
     clarify_question --> ask
     invalid --> revise
     error --> fix_setup["Fix .env, provider, Docker, or database setup"]
+    readiness_error --> fix_setup
     credential_error --> fix_setup
     setup_error --> fix_setup
 
@@ -311,6 +452,7 @@ flowchart TD
 - Update the code-flow diagram when the execution path changes.
 - Update the class diagram when core classes, protocols, result models, or policy contracts change.
 - Update the user action diagram when setup commands, CLI commands, or user-visible statuses change.
+- Update `docs/demo-database.md` and its docs consistency test when seed facts or the dataset fingerprint change.
 - Keep module boundaries SOLID-aligned: providers generate candidates, policy validates, executors run approved work, observability records diagnostics, and agents/graphs orchestrate.
 - Add abstractions only when they protect a real extension point or remove meaningful coupling.
 - Keep future-stage features out of the current diagram until they exist in code.

@@ -15,6 +15,9 @@ from queryforge.models import AgentResult, IntentPolicyDecision
         ("Top products by revenue", "allowed_ranking"),
         ("Compare revenue by category", "allowed_comparison"),
         ("Breakdown revenue by status", "allowed_breakdown"),
+        ("What is the payment success rate?", "allowed_aggregate"),
+        ("Show revenue by category", "allowed_breakdown"),
+        ("Show payment amount by payment method", "allowed_breakdown"),
         ("Show order id 1", "allowed_bounded_lookup"),
         ("Show revenue for customer Alice", "allowed_bounded_lookup"),
     ],
@@ -55,6 +58,8 @@ def test_requests_clarification_for_safe_but_underspecified_intents(
     [
         ("What is the weather?", "unsupported_non_analytics"),
         ("Show invoice totals", "unsupported_unavailable_data"),
+        ("Show shipment revenue", "unsupported_unavailable_data"),
+        ("Show inventory stock levels", "unsupported_unavailable_data"),
         ("Generate a dashboard from revenue", "unsupported_future_capability"),
         ("Forecast revenue next month", "unsupported_future_capability"),
         ("Who won the cricket match?", "unsupported_non_analytics"),

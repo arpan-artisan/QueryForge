@@ -34,6 +34,7 @@ from queryforge.observability import (
     TraceRecorder,
     build_bounded_row_preview,
 )
+from queryforge.postgres import DemoDatabaseNotReadyError
 from queryforge.schema import SCHEMA_CONTEXT
 from queryforge.sql_safety import SQLSafetyError, evaluate_sql_policy
 from queryforge.tools import QueryExecutorTool
@@ -306,6 +307,32 @@ class AskDataGraph:
                 "policy_reason": failure_decision.reason,
                 "skip_steps": ["answer_rendering"],
                 "skip_reason": "executor_revalidation_failed",
+            }
+        except DemoDatabaseNotReadyError as exc:
+            readiness = exc.readiness
+            sql = decision.normalized_sql or state.get("generated_sql")
+            state["recorder"].record_step(
+                "query_execution",
+                "error",
+                metadata={
+                    "sql": sql,
+                    "validation_status": decision.status,
+                    "policy_code": "demo_database_not_ready",
+                    "readiness": readiness.to_dict(),
+                },
+                error=str(exc),
+                started_at=started_at,
+                duration_ms=_elapsed_ms(started_perf),
+            )
+            return {
+                "status": "error",
+                "answer": f"Demo database is not ready: {readiness.reason}",
+                "sql": sql,
+                "validation_status": decision.status,
+                "policy_code": "demo_database_not_ready",
+                "policy_reason": readiness.reason,
+                "skip_steps": ["answer_rendering"],
+                "skip_reason": "demo_database_not_ready",
             }
         except psycopg.Error as exc:
             sql = decision.normalized_sql or state.get("generated_sql")

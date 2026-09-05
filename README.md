@@ -12,7 +12,7 @@ Both tools should eventually share the same foundation for LLM providers, databa
 Current scope is intentionally smaller: a local Ask Data NL2SQL CLI backed by Postgres.
 
 ```text
-question -> LangGraph AskDataGraph -> intent policy -> LLM provider -> candidate SQL -> SQL policy decision -> read-only Postgres executor -> trace + result JSON
+question -> LangGraph AskDataGraph -> intent policy -> LLM provider -> candidate SQL -> SQL policy decision -> demo DB readiness -> read-only Postgres executor -> trace + result JSON
 ```
 
 There is no frontend, public API, dashboard generation, persistent memory, multi-database support, eval harness, or governance system yet.
@@ -21,9 +21,10 @@ There is no frontend, public API, dashboard generation, persistent memory, multi
 
 ```bash
 uv sync
-docker compose up -d postgres
 Copy-Item .env.example .env
+docker compose up -d postgres
 uv run queryforge init-db
+uv run queryforge check-db
 uv run queryforge ask "What is total revenue?"
 ```
 
@@ -50,6 +51,37 @@ Shell environment variables still work and take precedence over `.env`:
 $env:GROQ_API_KEY = "your-groq-api-key"
 $env:QUERYFORGE_LLM_MODEL = "openai/gpt-oss-20b"
 ```
+
+## Demo Database Lifecycle
+
+The current local demo database is `queryforge-commerce-v1`, a deterministic
+Postgres commerce fixture in the `public` schema.
+
+It contains exactly seven approved tables:
+
+- `customers`
+- `categories`
+- `products`
+- `orders`
+- `order_items`
+- `payments`
+- `refunds`
+
+`uv run queryforge init-db` uses owner/init credentials to reset the local demo
+schema, recreate the tables, seed deterministic rows, grant read-only access,
+and print readiness JSON. Running it again should converge to the same row
+counts, expected facts, and fingerprint.
+
+This reset path is only for local demo development. It can replace manual edits
+inside the local Docker demo database. Keep production database work out of this
+command path.
+
+`uv run queryforge check-db` verifies the current local database from the
+read-only query credential and reports readiness, dataset version, fingerprint,
+row counts, selected facts, and concise failure reasons.
+
+Stable expected facts for future eval authors are documented in
+`docs/demo-database.md` and checked by tests.
 
 ## Ask Data Observability
 
@@ -78,7 +110,11 @@ Ask Data query execution uses the read-only URL:
 QUERYFORGE_QUERY_DATABASE_URL=postgresql://queryforge_readonly:queryforge_readonly@localhost:55432/queryforge?connect_timeout=5
 ```
 
-`QUERYFORGE_DATABASE_URL` is only kept as a legacy fallback for initialization. New local configuration should use the explicit owner and query variables above.
+`QUERYFORGE_DATABASE_URL` is only kept as a legacy fallback for initialization.
+New local configuration should use the explicit owner and query variables above.
+The read-only role can read approved demo tables but cannot write, create,
+alter, drop, lock, change effective grants, or inspect prohibited administrative
+state.
 
 ## Ask Data Guardrails
 
@@ -108,13 +144,13 @@ not execute a database query for those paths.
 The current SQL policy is allow-list based and still applies after allowed intent:
 
 - Only one PostgreSQL `SELECT` statement is allowed.
-- Only the demo tables `customers`, `products`, `orders`, `order_items`, and `refunds` are approved.
+- Only the demo tables `customers`, `categories`, `products`, `orders`, `order_items`, `payments`, and `refunds` are approved.
 - Known columns from those tables are approved; unknown tables, columns, schemas, or aliases return `unsupported`.
-- Approved analytics functions are `COUNT`, `SUM`, `AVG`, `MIN`, `MAX`, `ROUND`, `COALESCE`, and `DATE_TRUNC`.
+- Approved analytics functions are `COUNT`, `SUM`, `AVG`, `MIN`, `MAX`, `ROUND`, `COALESCE`, and `DATE_TRUNC`; `CASE` expressions are allowed for conditional aggregation.
 - Comments, stacked statements, mutating operations, data-modifying CTEs, `SELECT INTO`, locking clauses, system schemas, system tables, unapproved functions, and `SELECT *` are blocked.
 - Row-returning queries get a default `LIMIT 100`; larger static limits are capped at `100`.
 - Scalar aggregate queries such as `COUNT` or `SUM` are not force-limited because that would change the answer.
-- The executor revalidates SQL before opening a database connection and sets `statement_timeout` before running the validated SQL.
+- The executor revalidates SQL, checks demo database readiness, opens the read-only connection, and sets `statement_timeout` before running the validated SQL.
 
 CLI result statuses:
 
@@ -152,17 +188,17 @@ The intended staged path is:
 The active implementation change is:
 
 ```text
-introduce-langgraph-langfuse-observability-v1
+stabilize-demo-postgres-db-v1
 ```
 
-Its scope stays limited to graph-based Ask Data orchestration, local run traces, optional Langfuse
-export, preservation of guardrail order, tests, and docs.
+Its scope stays limited to the deterministic local Postgres demo database,
+readiness/fingerprint checks, schema and policy alignment, tests, and docs.
 
 ## Test
 
 ```bash
 uv run pytest
 uv run ruff check .
-openspec validate introduce-langgraph-langfuse-observability-v1 --strict
+openspec validate stabilize-demo-postgres-db-v1 --strict
 openspec validate --all --strict
 ```
