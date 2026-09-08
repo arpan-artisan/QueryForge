@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import json
+from pathlib import Path
 
 import psycopg
 
@@ -27,13 +28,61 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="QueryForge local commands.")
     subparsers = parser.add_subparsers(dest="command")
 
-    subparsers.add_parser("init-db", help="Reset, create, seed, and verify the local demo database.")
+    subparsers.add_parser(
+        "init-db", help="Reset, create, seed, and verify the local demo database."
+    )
     subparsers.add_parser("check-db", help="Check whether the local demo database is ready.")
 
     ask_parser = subparsers.add_parser("ask", help="Ask the NL2SQL agent a question.")
     ask_parser.add_argument("question", nargs="+", help="Question to ask.")
 
+    evals_parser = subparsers.add_parser("evals", help="Evaluate Ask Data on known tasks.")
+    eval_commands = evals_parser.add_subparsers(dest="eval_command", required=True)
+    run_parser = eval_commands.add_parser(
+        "run", help="Run reference calibration or live LLM evals."
+    )
+    run_parser.add_argument("--mode", choices=["reference", "live"], default="reference")
+    run_parser.add_argument("--split", choices=["dev", "held-out", "all"], default="dev")
+    run_parser.add_argument(
+        "--case", action="append", default=[], help="Select a case ID; repeatable."
+    )
+    run_parser.add_argument("--trials", type=int, choices=range(1, 11), default=1)
+    run_parser.add_argument("--suite", type=Path, help="Path to a versioned evaluation JSON suite.")
+    run_parser.add_argument("--output-dir", type=Path, default=Path("evaluation-results"))
+
     args = parser.parse_args()
+
+    if args.command == "evals":
+        from queryforge.eval_cases import DEFAULT_SUITE
+        from queryforge.evals import run_evaluations, write_report
+
+        report = asyncio.run(
+            run_evaluations(
+                args.suite or DEFAULT_SUITE,
+                mode=args.mode,
+                split=args.split,
+                ids=tuple(args.case),
+                trials=args.trials,
+            )
+        )
+        try:
+            path = write_report(report, args.output_dir)
+        except (OSError, ValueError) as exc:
+            print(json.dumps({"error": f"Could not write evaluation report: {type(exc).__name__}"}))
+            raise SystemExit(2) from exc
+        print(
+            json.dumps(
+                {
+                    "mode": report["mode"],
+                    "valid": report["valid"],
+                    "summary": report["summary"],
+                    "setup_error": report["setup_error"],
+                    "report": str(path.resolve()),
+                },
+                indent=2,
+            )
+        )
+        raise SystemExit(report["exit_code"])
 
     if args.command == "init-db":
         try:

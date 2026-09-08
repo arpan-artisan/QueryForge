@@ -20,6 +20,25 @@ APPROVED_FUNCTIONS = frozenset(
     }
 )
 
+# Canonical SQLGlot scalar type names, not arbitrary PostgreSQL type identifiers.
+APPROVED_CAST_TYPES = frozenset(
+    {
+        "DATE",
+        "TIMESTAMP",
+        "TIMESTAMPTZ",
+        "BOOLEAN",
+        "SMALLINT",
+        "INT",
+        "BIGINT",
+        "DECIMAL",
+        "FLOAT",
+        "DOUBLE",
+        "TEXT",
+        "VARCHAR",
+        "CHAR",
+    }
+)
+
 SYSTEM_SCHEMAS = frozenset(
     {
         "information_schema",

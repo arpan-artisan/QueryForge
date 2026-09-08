@@ -1,0 +1,36 @@
+name: Tests and reference evals
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.17"
+          enable-cache: true
+      - run: uv sync --locked --python 3.12
+      - run: docker compose up -d --wait postgres
+      - run: uv run queryforge init-db
+      - run: uv run ruff check .
+      - run: uv run pytest
+        env:
+          QUERYFORGE_TEST_EVAL_DB: "1"
+      - run: uv run queryforge evals run --mode reference --split all
+      - name: Retain reference evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reference-evaluation-reports
+          path: evaluation-results/
+          if-no-files-found: ignore
+      - name: Stop database
+        if: always()
+        run: docker compose down

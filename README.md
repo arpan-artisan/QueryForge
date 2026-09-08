@@ -15,7 +15,7 @@ Current scope is intentionally smaller: a local Ask Data NL2SQL CLI backed by Po
 question -> LangGraph AskDataGraph -> intent policy -> LLM provider -> candidate SQL -> SQL policy decision -> demo DB readiness -> read-only Postgres executor -> trace + result JSON
 ```
 
-There is no frontend, public API, dashboard generation, persistent memory, multi-database support, eval harness, or governance system yet.
+There is no frontend, public API, dashboard generation, persistent memory, multi-database support, or governance system yet.
 
 ## Local Setup
 
@@ -147,6 +147,7 @@ The current SQL policy is allow-list based and still applies after allowed inten
 - Only the demo tables `customers`, `categories`, `products`, `orders`, `order_items`, `payments`, and `refunds` are approved.
 - Known columns from those tables are approved; unknown tables, columns, schemas, or aliases return `unsupported`.
 - Approved analytics functions are `COUNT`, `SUM`, `AVG`, `MIN`, `MAX`, `ROUND`, `COALESCE`, and `DATE_TRUNC`; `CASE` expressions are allowed for conditional aggregation.
+- `CAST(value AS type)` and `value::type` are allowed for approved built-in scalar types: date/timestamp, boolean, integer, decimal, real/double, and text/character types. Targets must be unquoted and unqualified. Numeric precision is capped at 38, character length at 1024, and timestamp precision at 6. Arrays, custom types, catalog identifiers such as `regclass`, and unsupported modifiers remain blocked. Cast operands still receive all normal safety checks.
 - Comments, stacked statements, mutating operations, data-modifying CTEs, `SELECT INTO`, locking clauses, system schemas, system tables, unapproved functions, and `SELECT *` are blocked.
 - Row-returning queries get a default `LIMIT 100`; larger static limits are capped at `100`.
 - Scalar aggregate queries such as `COUNT` or `SUM` are not force-limited because that would change the answer.
@@ -164,6 +165,41 @@ CLI result statuses:
 The CLI prints inspectable JSON with the original question, trace identity, bounded trace timeline,
 status, answer, intent-policy outcome, generated or normalized SQL when available, rows, row count,
 provider, model, validation status, SQL policy code, and SQL policy reason.
+
+## Ask Data Evaluations
+
+The first eval suite has 30 commerce and policy questions: 20 development and
+10 held-out cases. Every successful analytics task has independently declared
+expected values and a reference query that is checked against Postgres before
+trials begin.
+
+```bash
+# Calibrate the harness and exercise the actual graph/DB without an LLM.
+uv run queryforge evals run
+
+# Measure the configured LLM using your existing .env credentials.
+uv run queryforge evals run --mode live
+
+# Repeat a small development selection to measure consistency.
+uv run queryforge evals run --mode live --case completed-revenue --trials 3
+
+# Run held-out questions after finishing changes against the dev set.
+uv run queryforge evals run --mode live --split held-out
+
+# Full deterministic regression suite (also used in CI).
+uv run queryforge evals run --mode reference --split all
+```
+
+Postgres must already be running and initialized. Evals never reset it. Reports
+are written to ignored `evaluation-results/<run-id>/report.json` and `report.md`.
+They contain actual answers, rows, generated SQL, local traces, per-dimension
+grades, failure categories, and reproducibility metadata. Reference scores test
+the harness; only live scores measure model capability. Live runs use provider
+quota. Exit codes: `0` all selected trials pass, `1` graded failures, `2` invalid
+setup/environment or report failure.
+
+See `docs/evaluations.md` for task authoring, grading rules, limitations, and
+the manual review process derived from the supplied Anthropic guidance.
 
 ## Product Direction
 
@@ -183,22 +219,24 @@ The intended staged path is:
 8. Analytics & Dashboard.
 9. Website.
 
-## Current OpenSpec Implementation Change
+## Recent OpenSpec Archives
 
-The active implementation change is:
+The latest archived implementation changes are:
 
 ```text
-stabilize-demo-postgres-db-v1
+openspec/changes/archive/2026-09-08-add-ask-data-evals-v1
+openspec/changes/archive/2026-09-08-allow-safe-postgres-casts-v1
 ```
 
-Its scope stays limited to the deterministic local Postgres demo database,
-readiness/fingerprint checks, schema and policy alignment, tests, and docs.
+Their scope is a small reference/live evaluation harness, clear benchmark tasks,
+deterministic graders, inspectable reports, tests, CI, and documentation.
+The follow-up cast change fixes the date-cast failure discovered by live evals
+and preserves the same SQL policy and executor boundaries.
 
 ## Test
 
 ```bash
 uv run pytest
 uv run ruff check .
-openspec validate stabilize-demo-postgres-db-v1 --strict
 openspec validate --all --strict
 ```

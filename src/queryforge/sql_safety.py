@@ -6,9 +6,11 @@ from collections.abc import Iterable
 import sqlglot
 from sqlglot import exp
 from sqlglot.errors import SqlglotError
+from sqlglot.tokens import TokenType
 
 from queryforge.models import SQLPolicyDecision
 from queryforge.schema_policy import (
+    APPROVED_CAST_TYPES,
     APPROVED_SCHEMA_NAME,
     approved_columns,
     is_approved_function,
@@ -49,6 +51,7 @@ def _expression_classes(*names: str) -> tuple[type[exp.Expression], ...]:
         if isinstance(expression_class, type):
             classes.append(expression_class)
     return tuple(classes)
+
 
 SET_OPERATION_TYPES = _expression_classes("Union", "Except", "Intersect")
 MUTATING_TYPES = _expression_classes(
@@ -91,7 +94,9 @@ def evaluate_sql_policy(sql: str) -> SQLPolicyDecision:
         )
 
     if LIMIT_ALL_PATTERN.search(cleaned):
-        return _blocked("limit_all_not_allowed", "LIMIT ALL is not an approved row bound.", original_sql)
+        return _blocked(
+            "limit_all_not_allowed", "LIMIT ALL is not an approved row bound.", original_sql
+        )
 
     if DATA_MODIFYING_CTE_PATTERN.search(cleaned):
         return _blocked(
@@ -110,7 +115,9 @@ def evaluate_sql_policy(sql: str) -> SQLPolicyDecision:
 
     expression = expressions[0]
     if isinstance(expression, SET_OPERATION_TYPES):
-        return _blocked("set_operation_not_allowed", "Set operations are not allowed.", original_sql)
+        return _blocked(
+            "set_operation_not_allowed", "Set operations are not allowed.", original_sql
+        )
 
     if not isinstance(expression, exp.Select):
         return _blocked("non_select_statement", "Only SELECT statements are allowed.", original_sql)
@@ -177,7 +184,9 @@ def _validate_ast(expression: exp.Select, original_sql: str) -> SQLPolicyDecisio
     if function_decision is not None:
         return function_decision
 
-    return _validate_select_scope(expression, original_sql, inherited_sources={}, visited_selects=set())
+    return _validate_select_scope(
+        expression, original_sql, inherited_sources={}, visited_selects=set()
+    )
 
 
 def _validate_stars(expression: exp.Expression, original_sql: str) -> SQLPolicyDecision | None:
@@ -193,6 +202,19 @@ def _validate_stars(expression: exp.Expression, original_sql: str) -> SQLPolicyD
 
 
 def _validate_functions(expression: exp.Expression, original_sql: str) -> SQLPolicyDecision | None:
+    # SQLGlot folds quoted type names such as "Date" into DATE, losing their SQL meaning.
+    # Reject quoted identifiers discarded by parsing; ordinary quoted columns/aliases retain spans.
+    if expression.find(exp.Cast) is not None:
+        identifier_starts = {node.meta.get("start") for node in expression.find_all(exp.Identifier)}
+        if any(
+            token.token_type == TokenType.IDENTIFIER and token.start not in identifier_starts
+            for token in sqlglot.tokenize(original_sql.strip(), read="postgres")
+        ):
+            return _blocked(
+                "cast_type_not_allowed",
+                "Quoted cast type names are not approved.",
+                original_sql,
+            )
     for dot in expression.find_all(exp.Dot):
         function = dot.args.get("expression")
         if isinstance(function, exp.Func):
@@ -211,6 +233,11 @@ def _validate_functions(expression: exp.Expression, original_sql: str) -> SQLPol
                 )
 
     for function in expression.find_all(exp.Func):
+        if isinstance(function, exp.Cast):
+            cast_decision = _validate_cast(function, original_sql)
+            if cast_decision is not None:
+                return cast_decision
+            continue
         function_name = _function_name(function)
         if not is_approved_function(function_name):
             return _blocked(
@@ -220,6 +247,75 @@ def _validate_functions(expression: exp.Expression, original_sql: str) -> SQLPol
             )
 
     return None
+
+
+def _validate_cast(cast: exp.Cast, original_sql: str) -> SQLPolicyDecision | None:
+    if type(cast) is not exp.Cast or any(
+        value is not None for key, value in cast.args.items() if key not in {"this", "to"}
+    ):
+        return _blocked(
+            "cast_syntax_not_allowed",
+            "Only standard CAST and :: conversions are allowed.",
+            original_sql,
+        )
+    target = cast.args.get("to")
+    if (
+        not isinstance(target, exp.DataType)
+        or not isinstance(target.this, exp.DataType.Type)
+        or target.this.value not in APPROVED_CAST_TYPES
+        or target.args.get("nested")
+        or any(
+            value is not None
+            for key, value in target.args.items()
+            if key not in {"this", "expressions", "nested"}
+        )
+    ):
+        return _blocked(
+            "cast_type_not_allowed",
+            "Cast target must be an approved built-in scalar type.",
+            original_sql,
+        )
+    if not _cast_modifiers_allowed(target):
+        return _blocked(
+            "cast_modifier_not_allowed",
+            "Cast type modifiers exceed the approved literal bounds.",
+            original_sql,
+        )
+    return None
+
+
+def _cast_modifiers_allowed(target: exp.DataType) -> bool:
+    if not target.expressions:
+        return True
+    values = []
+    for parameter in target.expressions:
+        if not isinstance(parameter, exp.DataTypeParam):
+            return False
+        literal = parameter.this
+        if (
+            not isinstance(literal, exp.Literal)
+            or literal.is_string
+            or not re.fullmatch(r"[0-9]+", str(literal.this))
+            or any(value is not None for key, value in parameter.args.items() if key != "this")
+        ):
+            return False
+        try:
+            values.append(int(literal.this))
+        except ValueError:
+            return False
+    match target.this.value:
+        case "DECIMAL":
+            return (
+                len(values) in {1, 2}
+                and 1 <= values[0] <= 38
+                and (len(values) == 1 or 0 <= values[1] <= values[0])
+            )
+        case "CHAR" | "VARCHAR":
+            return len(values) == 1 and 1 <= values[0] <= 1024
+        case "TIMESTAMP" | "TIMESTAMPTZ":
+            return len(values) == 1 and 0 <= values[0] <= 6
+        case _:
+            return False
 
 
 def _validate_select_scope(
@@ -571,7 +667,9 @@ def _blocked(code: str, reason: str, original_sql: str) -> SQLPolicyDecision:
 
 
 def _unsupported(code: str, reason: str, original_sql: str) -> SQLPolicyDecision:
-    return SQLPolicyDecision(status="unsupported", code=code, reason=reason, original_sql=original_sql)
+    return SQLPolicyDecision(
+        status="unsupported", code=code, reason=reason, original_sql=original_sql
+    )
 
 
 def _invalid(code: str, reason: str, original_sql: str) -> SQLPolicyDecision:

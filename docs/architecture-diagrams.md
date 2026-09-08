@@ -2,7 +2,7 @@
 
 This is the living diagram page for QueryForge. Update it whenever an OpenSpec change alters the user flow, module boundaries, core classes, result models, statuses, setup steps, or execution path.
 
-Current scope: local CLI Ask Data flow for a stabilized seven-table Postgres demo database with LangGraph orchestration, bounded local traces, optional Langfuse export, and execution-time demo database readiness checks.
+Current scope: local CLI Ask Data flow for a stabilized seven-table Postgres demo database with LangGraph orchestration, bounded local traces, optional Langfuse export, execution-time demo database readiness checks, and reference/live evaluation commands.
 
 ## Demo Schema
 
@@ -114,9 +114,9 @@ flowchart TD
     query_tool --> query_url["get_database_url() read-only execution URL"]
     cli_ask --> agent["NL2SQLAgent.from_provider_factory(create_llm_provider, query_tool, trace_exporter, trace_preview_rows)"]
 
-    agent --> graph["AskDataGraph.run(question)"]
-    graph --> trace_id["generate_trace_id()"]
-    graph --> recorder["LocalTraceRecorder(question, trace_id)"]
+    agent --> ask_graph["AskDataGraph.run(question)"]
+    ask_graph --> trace_id["generate_trace_id()"]
+    ask_graph --> recorder["LocalTraceRecorder(question, trace_id)"]
 
     recorder --> intent_node["intent_policy node"]
     intent_node --> intent["evaluate_intent_policy(question)"]
@@ -141,7 +141,8 @@ flowchart TD
 
     candidate_sql --> validation_node["sql_validation node"]
     validation_node --> policy["evaluate_sql_policy(candidate_sql)"]
-    policy --> sql_decision{"SQLPolicyDecision.status"}
+    policy --> cast_policy["AST safety: approved cast targets and bounded modifiers; nested operands still checked"]
+    cast_policy --> sql_decision{"SQLPolicyDecision.status"}
 
     sql_decision -- blocked --> skip_sql["Record SQL policy failure and skipped query execution"]
     sql_decision -- unsupported --> skip_sql
@@ -149,7 +150,7 @@ flowchart TD
     sql_decision -- allowed --> execution_node["query_execution node"]
 
     execution_node --> execute["query_tool.run(SQLPolicyDecision)"]
-    execute --> revalidate["evaluate_sql_policy(normalized_sql) again"]
+    execute --> revalidate["evaluate_sql_policy(normalized_sql) again, including casts"]
     revalidate --> readiness_check["require_demo_database_ready(read-only URL)"]
     readiness_check --> readiness_payload["Verify version, table shape, row counts, facts, and fingerprint"]
     readiness_payload --> readonly_pg["Postgres read-only role via psycopg"]
@@ -447,12 +448,135 @@ flowchart TD
     next_question --> ask
 ```
 
+## Evaluation Code Flow
+
+The eval runner wraps the existing agent; it does not create a second SQL
+generation or execution path. Reference and live runs both use local traces.
+
+```mermaid
+flowchart TD
+    command["queryforge evals run"] --> load["load_suite and select_cases"]
+    load --> contract["require_demo_database_ready and pinned contract check"]
+    contract --> digest["database_content_digest of approved columns"]
+    digest --> calibrate["Reference SQL through QueryExecutorTool"]
+    calibrate --> reference_grade["rows_match against declared expected rows"]
+    reference_grade --> fresh["Fresh agent, recording provider, recording executor per trial"]
+    fresh --> ask_graph["NL2SQLAgent.answer using normal AskDataGraph"]
+    ask_graph --> intent_check{"Normal intent policy"}
+    intent_check -- allowed --> mode{"Provider mode"}
+    mode -- reference --> scripted["ReferenceProvider returns reference SQL"]
+    mode -- live --> configured["create_llm_provider uses local configuration"]
+    scripted --> policy["Existing SQL validation and read-only execution policies"]
+    configured --> policy
+    intent_check -- local rejection --> result["AgentResult and local trace"]
+    policy --> result
+    result --> grades["grade_result: status, safety, results, diagnostics"]
+    grades --> unchanged["Check content digest after trial"]
+    unchanged --> repeat{"More cases or trials?"}
+    repeat -- yes --> fresh
+    repeat -- no --> aggregate["summarize trials and categories"]
+    contract -. not ready .-> invalid["Invalid run, setup error, no aggregate score"]
+    reference_grade -. wrong reference .-> invalid
+    unchanged -. content changed .-> invalid
+    aggregate --> report["write_report: redact JSON and Markdown"]
+    invalid --> report
+    report --> exit_code["CLI exit 0 pass, 1 graded failure, 2 invalid run"]
+```
+
+## Evaluation Class Relationships
+
+```mermaid
+classDiagram
+    class EvalSuite {
+        +str version
+        +str dataset_version
+        +str dataset_fingerprint
+        +list cases
+    }
+    class EvalCase {
+        +str id
+        +str split
+        +str question
+        +str expected_status
+        +str reference_sql
+        +list expected_rows
+        +bool ordered
+        +float tolerance
+    }
+    class Grade {
+        +bool passed
+        +str reason
+    }
+    class ReferenceProvider {
+        +generate_sql(question, schema_context) str
+    }
+    class RecordingProvider {
+        +LLMProvider provider
+        +int calls
+        +list outputs
+        +generate_sql(question, schema_context) str
+    }
+    class RecordingExecutor {
+        +QueryExecutorTool executor
+        +int calls
+        +list executed_sql
+        +run(query) QueryToolResult
+    }
+    class EvaluationFunctions {
+        +run_evaluations(suite_path, mode, split, ids, trials) dict
+        +run_trial(case, trial_number, provider_factory, executor) dict
+        +database_content_digest(database_url) str
+        +summarize(trials) dict
+        +write_report(report, output_dir) Path
+    }
+    class GraderFunctions {
+        +rows_match(actual, case) bool
+        +grade_result(case, result, model_calls, executor_calls, executed_sql) dict
+    }
+    EvalSuite *-- EvalCase
+    ReferenceProvider ..|> LLMProvider
+    RecordingProvider ..|> LLMProvider
+    RecordingProvider --> LLMProvider
+    RecordingExecutor --> QueryExecutorTool
+    EvaluationFunctions --> EvalSuite
+    EvaluationFunctions --> NL2SQLAgent
+    EvaluationFunctions --> RecordingProvider
+    EvaluationFunctions --> RecordingExecutor
+    EvaluationFunctions --> GraderFunctions
+    GraderFunctions --> AgentResult
+    GraderFunctions --> EvalCase
+    GraderFunctions --> Grade
+```
+
+## Evaluation User Actions
+
+```mermaid
+flowchart TD
+    start["Start Postgres and run check-db"] --> choose{"What are you checking?"}
+    choose -- harness and regression --> reference["evals run --mode reference"]
+    choose -- LLM capability --> key["Configure provider key in ignored .env"]
+    key --> live["evals run --mode live"]
+    reference --> read["Open local report.md and report.json"]
+    live --> read
+    read --> outcome{"Outcome"}
+    outcome -- setup failure --> repair["Fix environment or invalid reference task"]
+    repair --> start
+    outcome -- graded failure --> inspect["Inspect question, SQL, values, grades, and trace"]
+    inspect --> decide["Identify agent error, policy limitation, provider failure, or unfair grader"]
+    decide --> revise["Make the justified change and retain regression cases"]
+    revise --> choose
+    outcome -- passes --> sample["Manually review a sample of passing transcripts"]
+    sample --> heldout["Assess held-out cases after development changes"]
+    heldout --> repeat["Use repeated live trials to assess consistency"]
+```
+
 ## Maintenance Checklist
 
 - Update the code-flow diagram when the execution path changes.
 - Update the class diagram when core classes, protocols, result models, or policy contracts change.
 - Update the user action diagram when setup commands, CLI commands, or user-visible statuses change.
 - Update `docs/demo-database.md` and its docs consistency test when seed facts or the dataset fingerprint change.
+- Update evaluation diagrams when trial isolation, provider mode, grading, reports, or CLI selection changes; validate Mermaid syntax and check names against code.
 - Keep module boundaries SOLID-aligned: providers generate candidates, policy validates, executors run approved work, observability records diagnostics, and agents/graphs orchestrate.
 - Add abstractions only when they protect a real extension point or remove meaningful coupling.
 - Keep future-stage features out of the current diagram until they exist in code.
