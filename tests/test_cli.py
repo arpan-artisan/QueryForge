@@ -5,7 +5,7 @@ import pytest
 
 from queryforge import cli
 from queryforge.llm import LLMNotConfiguredError
-from queryforge.models import QueryToolResult, SQLPolicyDecision
+from queryforge.models import ApprovedQuery, QueryToolResult
 from queryforge.observability import NoOpTraceExporter, ObservabilityConfig
 from queryforge.postgres import DemoDatabaseReadiness
 
@@ -22,9 +22,9 @@ class StubLLM:
 
 
 class StubQueryTool:
-    def run(self, sql: str | SQLPolicyDecision) -> QueryToolResult:
-        executable_sql = sql.normalized_sql if isinstance(sql, SQLPolicyDecision) else sql
-        return QueryToolResult(sql=executable_sql or "", rows=[{"order_count": 3}], row_count=1)
+    def run(self, query: ApprovedQuery) -> QueryToolResult:
+        assert isinstance(query, ApprovedQuery)
+        return QueryToolResult(sql=query.sql, rows=[{"order_count": 3}], row_count=1)
 
 
 @pytest.fixture(autouse=True)
@@ -51,10 +51,12 @@ def test_ask_command_prints_inspectable_json(monkeypatch, capsys) -> None:
     assert payload["trace"]["trace_id"] == payload["trace_id"]
     assert [step["name"] for step in payload["trace"]["steps"]][-1] == "final_result"
     assert _step(payload, "intent_policy")["metadata"]["intent_status"] == "allowed"
+    assert _step(payload, "context_build")["metadata"]["schema_context_chars"] > 0
     assert _step(payload, "llm_sql_generation")["metadata"]["generated_sql"] == (
         "SELECT COUNT(*) AS order_count FROM orders"
     )
     assert _step(payload, "sql_validation")["metadata"]["validation_status"] == "allowed"
+    assert _step(payload, "query_approval")["metadata"]["policy_code"] == "query_allowed"
     assert _step(payload, "query_execution")["metadata"]["row_count"] == 1
     assert _step(payload, "query_execution")["metadata"]["preview_rows"] == [{"order_count": 3}]
     assert payload["provider"] == "stub"

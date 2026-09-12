@@ -3,9 +3,19 @@ from typing import Self
 import pytest
 
 from queryforge import tools
-from queryforge.models import SQLPolicyDecision
+from queryforge.approval import SQLValidatorApprover
+from queryforge.models import ApprovedQuery, PolicyDecision, SQLCandidate, SQLPolicyDecision
 from queryforge.sql_safety import SQLSafetyError
 from queryforge.tools import QueryExecutorTool
+
+
+def _approve(sql: str) -> ApprovedQuery:
+    approved, decision = SQLValidatorApprover().approve(
+        SQLCandidate(sql=sql, provider="test", model="test")
+    )
+    assert decision.status == "allowed"
+    assert approved is not None
+    return approved
 
 
 def test_query_executor_validates_before_connecting(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -19,12 +29,12 @@ def test_query_executor_validates_before_connecting(monkeypatch: pytest.MonkeyPa
     )
 
     with pytest.raises(SQLSafetyError):
-        tool.run("DROP TABLE orders")
+        tool.run("DROP TABLE orders")  # type: ignore[arg-type]
 
     assert readiness_calls == []
 
 
-def test_query_executor_revalidates_policy_decision_before_connecting(
+def test_query_executor_rejects_policy_decision_before_connecting(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     readiness_calls: list[str] = []
@@ -44,7 +54,33 @@ def test_query_executor_revalidates_policy_decision_before_connecting(
     )
 
     with pytest.raises(SQLSafetyError):
-        tool.run(decision)
+        tool.run(decision)  # type: ignore[arg-type]
+
+    assert readiness_calls == []
+
+
+def test_query_executor_revalidates_approved_query_before_connecting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    readiness_calls: list[str] = []
+    tool = QueryExecutorTool(database_url="postgresql://invalid-host.invalid/queryforge")
+    approved = ApprovedQuery(
+        sql="DROP TABLE orders",
+        decision=PolicyDecision(
+            status="allowed",
+            code="query_allowed",
+            reason="forged test object",
+        ),
+    )
+
+    monkeypatch.setattr(
+        tools,
+        "require_demo_database_ready",
+        lambda database_url: readiness_calls.append(database_url),
+    )
+
+    with pytest.raises(SQLSafetyError):
+        tool.run(approved)
 
     assert readiness_calls == []
 
@@ -89,7 +125,7 @@ def test_query_executor_sets_timeout_before_validated_sql(monkeypatch: pytest.Mo
     )
 
     result = QueryExecutorTool(database_url="postgresql://test/queryforge").run(
-        "SELECT id FROM orders"
+        _approve("SELECT id FROM orders")
     )
 
     assert executed_sql == [

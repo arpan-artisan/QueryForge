@@ -17,7 +17,7 @@ from queryforge.eval_cases import (
     select_cases,
 )
 from queryforge.llm import LLMNotConfiguredError, LLMProviderError
-from queryforge.models import AgentResult, QueryToolResult
+from queryforge.models import AgentResult, ApprovedQuery, QueryToolResult
 from queryforge.postgres import DemoDatabaseReadiness
 from queryforge.schema import SCHEMA_CONTEXT
 from queryforge.sql_safety import SQLSafetyError, evaluate_sql_policy
@@ -42,7 +42,8 @@ class FakeExecutor:
         self.rows = rows if rows is not None else [{"count": 7}]
 
     def run(self, query):
-        statement = query if isinstance(query, str) else query.normalized_sql
+        assert isinstance(query, ApprovedQuery)
+        statement = query.sql
         assert evaluate_sql_policy(statement).status == "allowed"
         return QueryToolResult(sql=statement, rows=self.rows, row_count=len(self.rows))
 
@@ -376,10 +377,8 @@ def test_calibration_uses_the_same_revalidation_path_as_agent(runner_environment
 
     class RecordingTool(FakeExecutor):
         def run(self, query):
-            from queryforge.models import SQLPolicyDecision
-
-            assert isinstance(query, SQLPolicyDecision)
-            assert evaluate_sql_policy(query.normalized_sql).status == "allowed"
+            assert isinstance(query, ApprovedQuery)
+            assert evaluate_sql_policy(query.sql).status == "allowed"
             seen.append(query)
             return super().run(query)
 

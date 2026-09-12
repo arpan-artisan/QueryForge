@@ -5,7 +5,7 @@ import pytest
 
 from queryforge.ask_data_graph import AskDataGraph
 from queryforge.llm import LLMNotConfiguredError, LLMProviderError, LLMUnsupportedQuestionError
-from queryforge.models import QueryToolResult, SQLPolicyDecision
+from queryforge.models import ApprovedQuery, QueryToolResult
 from queryforge.observability import LocalTraceRecorder
 from queryforge.postgres import DemoDatabaseNotReadyError, DemoDatabaseReadiness
 
@@ -39,13 +39,13 @@ class FailingLLM:
 class StubQueryTool:
     def __init__(self, rows: list[dict[str, object]] | None = None) -> None:
         self.rows = rows or [{"order_count": 3}]
-        self.calls: list[str | SQLPolicyDecision] = []
+        self.calls: list[ApprovedQuery] = []
 
-    def run(self, sql: str | SQLPolicyDecision) -> QueryToolResult:
-        self.calls.append(sql)
-        executable_sql = sql.normalized_sql if isinstance(sql, SQLPolicyDecision) else sql
+    def run(self, query: ApprovedQuery) -> QueryToolResult:
+        assert isinstance(query, ApprovedQuery)
+        self.calls.append(query)
         return QueryToolResult(
-            sql=executable_sql or "",
+            sql=query.sql,
             rows=self.rows,
             row_count=len(self.rows),
         )
@@ -53,20 +53,22 @@ class StubQueryTool:
 
 class FailingQueryTool:
     def __init__(self) -> None:
-        self.calls: list[str | SQLPolicyDecision] = []
+        self.calls: list[ApprovedQuery] = []
 
-    def run(self, sql: str | SQLPolicyDecision) -> QueryToolResult:
-        self.calls.append(sql)
+    def run(self, query: ApprovedQuery) -> QueryToolResult:
+        assert isinstance(query, ApprovedQuery)
+        self.calls.append(query)
         raise psycopg.OperationalError("database unavailable")
 
 
 class NotReadyQueryTool:
     def __init__(self, readiness: DemoDatabaseReadiness) -> None:
         self.readiness = readiness
-        self.calls: list[str | SQLPolicyDecision] = []
+        self.calls: list[ApprovedQuery] = []
 
-    def run(self, sql: str | SQLPolicyDecision) -> QueryToolResult:
-        self.calls.append(sql)
+    def run(self, query: ApprovedQuery) -> QueryToolResult:
+        assert isinstance(query, ApprovedQuery)
+        self.calls.append(query)
         raise DemoDatabaseNotReadyError(self.readiness)
 
 
@@ -104,25 +106,29 @@ def test_ask_data_graph_success_runs_all_major_stages() -> None:
     assert result.trace is not None
     assert [step.name for step in result.trace.steps] == [
         "intent_policy",
+        "context_build",
         "provider_resolution",
         "llm_sql_generation",
         "sql_validation",
+        "query_approval",
         "query_execution",
         "answer_rendering",
         "final_result",
     ]
-    assert [step.status for step in result.trace.steps] == ["ok"] * 7
+    assert [step.status for step in result.trace.steps] == ["ok"] * 9
     assert result.trace.duration_ms is not None
     assert all(step.duration_ms >= 0 for step in result.trace.steps)
     assert result.trace.steps[0].metadata["intent_status"] == "allowed"
-    assert result.trace.steps[2].metadata["provider"] == "stub"
-    assert result.trace.steps[2].metadata["model"] == "graph-test"
-    assert result.trace.steps[3].metadata["validation_status"] == "allowed"
-    execution_step = result.trace.steps[4]
+    assert result.trace.steps[1].metadata["schema_context_chars"] > 0
+    assert result.trace.steps[3].metadata["provider"] == "stub"
+    assert result.trace.steps[3].metadata["model"] == "graph-test"
+    assert result.trace.steps[4].metadata["validation_status"] == "allowed"
+    assert result.trace.steps[5].metadata["policy_code"] == "query_allowed"
+    execution_step = result.trace.steps[6]
     assert execution_step.metadata["row_count"] == 1
     assert execution_step.metadata["preview_rows"] == [{"order_count": 3}]
-    assert result.trace.steps[5].metadata["row_count"] == 1
-    assert result.trace.steps[6].metadata["status"] == "ok"
+    assert result.trace.steps[7].metadata["row_count"] == 1
+    assert result.trace.steps[8].metadata["status"] == "ok"
     assert llm.calls
     assert query_tool.calls
 

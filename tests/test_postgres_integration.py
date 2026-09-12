@@ -58,7 +58,9 @@ def test_init_database_creates_readonly_role_with_select_only_privileges() -> No
     _assert_readonly_cannot_change_grants()
 
     with pytest.raises(SQLSafetyError):
-        QueryExecutorTool(database_url=DEFAULT_DATABASE_QUERY_URL).run("SELECT pg_sleep(0)")
+        QueryExecutorTool(database_url=DEFAULT_DATABASE_QUERY_URL).run(
+            "SELECT pg_sleep(0)"  # type: ignore[arg-type]
+        )
 
 
 def test_init_database_resets_stale_volume_state() -> None:

@@ -5,22 +5,22 @@ from pathlib import Path
 
 import psycopg
 
-from queryforge.agent import NL2SQLAgent
 from queryforge.llm import create_llm_provider
 from queryforge.observability import create_trace_exporter, load_observability_config
 from queryforge.postgres import DEFAULT_DATABASE_OWNER_URL, check_demo_database_ready, init_database
+from queryforge.runtime import AskDataRuntime
 from queryforge.tools import QueryExecutorTool
 
 
 async def ask(question: str) -> None:
     observability_config = load_observability_config()
-    agent = NL2SQLAgent.from_provider_factory(
-        create_llm_provider,
-        QueryExecutorTool(),
+    runtime = AskDataRuntime(
+        llm_resolver=create_llm_provider,
+        query_tool=QueryExecutorTool(),
         trace_exporter=create_trace_exporter(observability_config),
         trace_preview_rows=observability_config.trace_preview_rows,
     )
-    response = await agent.answer(question)
+    response = await runtime.run(question)
     print(response.model_dump_json(indent=2))
 
 

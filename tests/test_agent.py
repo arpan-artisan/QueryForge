@@ -5,7 +5,7 @@ import pytest
 
 from queryforge.agent import MAX_ANSWER_PREVIEW_ROWS, NL2SQLAgent, render_rows_as_answer
 from queryforge.llm import LLMNotConfiguredError, LLMProviderError, LLMUnsupportedQuestionError
-from queryforge.models import QueryToolResult, SQLPolicyDecision
+from queryforge.models import ApprovedQuery, QueryToolResult
 
 
 class StubLLM:
@@ -37,16 +37,17 @@ class FailingLLM:
 class StubQueryTool:
     def __init__(self, rows: list[dict[str, object]] | None = None) -> None:
         self.rows = rows or [{"total_revenue": 1345.0}]
-        self.calls: list[str | SQLPolicyDecision] = []
+        self.calls: list[ApprovedQuery] = []
 
-    def run(self, sql: str | SQLPolicyDecision) -> QueryToolResult:
-        self.calls.append(sql)
-        executable_sql = sql.normalized_sql if isinstance(sql, SQLPolicyDecision) else sql
-        return QueryToolResult(sql=executable_sql or "", rows=self.rows, row_count=len(self.rows))
+    def run(self, query: ApprovedQuery) -> QueryToolResult:
+        assert isinstance(query, ApprovedQuery)
+        self.calls.append(query)
+        return QueryToolResult(sql=query.sql, rows=self.rows, row_count=len(self.rows))
 
 
 class FailingQueryTool:
-    def run(self, sql: str | SQLPolicyDecision) -> QueryToolResult:
+    def run(self, query: ApprovedQuery) -> QueryToolResult:
+        assert isinstance(query, ApprovedQuery)
         raise psycopg.OperationalError("database unavailable")
 
 

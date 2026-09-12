@@ -112,9 +112,10 @@ flowchart TD
 
     cli_ask --> query_tool["QueryExecutorTool()"]
     query_tool --> query_url["get_database_url() read-only execution URL"]
-    cli_ask --> agent["NL2SQLAgent.from_provider_factory(create_llm_provider, query_tool, trace_exporter, trace_preview_rows)"]
+    cli_ask --> runtime["AskDataRuntime(create_llm_provider, query_tool, trace_exporter, trace_preview_rows)"]
 
-    agent --> ask_graph["AskDataGraph.run(question)"]
+    runtime --> request["AgentRequest(question, source=cli)"]
+    request --> ask_graph["AskDataGraph.run(request)"]
     ask_graph --> trace_id["generate_trace_id()"]
     ask_graph --> recorder["LocalTraceRecorder(question, trace_id)"]
 
@@ -122,41 +123,48 @@ flowchart TD
     intent_node --> intent["evaluate_intent_policy(question)"]
     intent --> intent_decision{"IntentPolicyDecision.status"}
 
-    intent_decision -- blocked --> skip_intent["Record skipped provider, LLM, SQL validation, query execution, and answer rendering"]
+    intent_decision -- blocked --> skip_intent["Record skipped context, provider, LLM, SQL validation, approval, query execution, and answer rendering"]
     intent_decision -- unsupported --> skip_intent
     intent_decision -- clarification_required --> skip_intent
 
-    intent_decision -- allowed --> provider_node["provider_resolution node"]
+    intent_decision -- allowed --> context_node["context_build node"]
+    context_node --> context_builder["StaticSchemaContextBuilder.build(request)"]
+    context_builder --> query_context["QueryContext(schema_text, examples)"]
+
+    query_context --> provider_node["provider_resolution node"]
     provider_node --> provider_factory["create_llm_provider()"]
     provider_factory --> dotenv["load_dotenv()"]
     dotenv --> provider_config["Read provider, model, and GROQ_API_KEY"]
     provider_config --> llm["LLMProvider implementation"]
-    provider_factory -. missing provider config .-> skip_provider["Record provider error and skipped LLM/DB work"]
+    provider_factory -. missing provider config .-> skip_provider["Record provider error and skipped generation, validation, approval, and DB work"]
 
     llm --> generation_node["llm_sql_generation node"]
-    generation_node --> schema["SCHEMA_CONTEXT"]
-    generation_node --> llm_call["llm.generate_sql(question, schema_context)"]
-    llm_call --> candidate_sql["Candidate SQL text"]
-    llm_call -. provider unsupported or error .-> skip_generation["Record generation failure and skipped validation/DB work"]
+    generation_node --> generator["SQLGenerator.generate(request, context)"]
+    generator --> llm_call["llm.generate_sql(question, context.schema_text)"]
+    llm_call --> candidate["SQLCandidate(sql, provider, model, attempt)"]
+    llm_call -. provider unsupported or error .-> skip_generation["Record generation failure and skipped validation, approval, and DB work"]
 
-    candidate_sql --> validation_node["sql_validation node"]
-    validation_node --> policy["evaluate_sql_policy(candidate_sql)"]
+    candidate --> validation_node["sql_validation node"]
+    validation_node --> approver["SQLValidatorApprover.approve(candidate)"]
+    approver --> policy["evaluate_sql_policy(candidate.sql)"]
     policy --> cast_policy["AST safety: approved cast targets and bounded modifiers; nested operands still checked"]
     cast_policy --> sql_decision{"SQLPolicyDecision.status"}
 
-    sql_decision -- blocked --> skip_sql["Record SQL policy failure and skipped query execution"]
+    sql_decision -- blocked --> skip_sql["Record SQL policy failure and skipped approval/query execution"]
     sql_decision -- unsupported --> skip_sql
     sql_decision -- invalid --> skip_sql
-    sql_decision -- allowed --> execution_node["query_execution node"]
+    sql_decision -- allowed --> approval_step["Record query_approval and create ApprovedQuery"]
+    approval_step --> approved_query["ApprovedQuery(normalized_sql, policy decision)"]
+    approved_query --> execution_node["query_execution node"]
 
-    execution_node --> execute["query_tool.run(SQLPolicyDecision)"]
-    execute --> revalidate["evaluate_sql_policy(normalized_sql) again, including casts"]
+    execution_node --> execute["query_tool.run(ApprovedQuery)"]
+    execute --> revalidate["evaluate_sql_policy(approved_query.sql) again, including casts"]
     revalidate --> readiness_check["require_demo_database_ready(read-only URL)"]
     readiness_check --> readiness_payload["Verify version, table shape, row counts, facts, and fingerprint"]
     readiness_payload --> readonly_pg["Postgres read-only role via psycopg"]
     readonly_pg --> timeout["SET statement_timeout = '5s'"]
     timeout --> sql_execute["Execute normalized SELECT"]
-    sql_execute --> rows["QueryToolResult rows + row_count"]
+    sql_execute --> rows["QueryResult rows + row_count"]
 
     revalidate -. policy mismatch .-> skip_execution["Record execution validation error and skipped answer rendering"]
     readiness_check -. missing, stale, drifted, or unreachable DB .-> skip_execution
@@ -174,31 +182,34 @@ flowchart TD
 
     final_node --> finish_trace["recorder.finish(status)"]
     finish_trace --> export_trace{"Trace exporter"}
-    export_trace -- local/no-op --> result["AgentResult with trace_id + bounded trace"]
+    export_trace -- local/no-op --> result["AskDataResult with request_id, trace_id, and bounded trace"]
     export_trace -- Langfuse configured --> langfuse["Export RunTrace events to Langfuse"]
     langfuse -. export failure .-> export_error["Record export error without changing query status"]
     langfuse --> result
     export_error --> result
 
-    result --> json["Print AgentResult JSON"]
+    result --> json["Print AskDataResult-compatible JSON"]
 ```
 
 ## Class Diagram
 
 ```mermaid
 classDiagram
+    class AskDataRuntime {
+        +AskDataGraph _graph
+        +run(request) AskDataResult
+    }
+
     class NL2SQLAgent {
-        +LLMProvider? llm
-        +LLMProviderFactory? llm_factory
-        +QueryExecutorTool query_tool
-        +AskDataGraph ask_data_graph
+        +AskDataRuntime _runtime
         +from_provider_factory(llm_factory, query_tool, trace_exporter, trace_preview_rows) NL2SQLAgent
         +answer(question) AgentResult
     }
 
     class AskDataGraph {
-        +run(question) AgentResult
+        +run(request) AgentResult
         +evaluate_intent(state) dict
+        +build_context(state) dict
         +resolve_provider(state) dict
         +generate_sql(state) dict
         +validate_sql(state) dict
@@ -209,14 +220,74 @@ classDiagram
 
     class AskDataGraphState {
         <<TypedDict>>
-        +str question
+        +AgentRequest request
         +str trace_id
         +TraceRecorder recorder
         +TraceExporter? trace_exporter
+        +ContextBuilder context_builder
+        +QueryContext? context
         +LLMProvider? llm
+        +SQLCandidate? candidate
+        +ApprovedQuery? approved_query
+        +QueryResult? query_result
         +IntentPolicyDecision? intent_decision
         +SQLPolicyDecision? sql_decision
         +AgentResult? result
+    }
+
+    class AgentRequest {
+        +str question
+        +str request_id
+        +RequestSource source
+        +str? session_id
+    }
+
+    class QueryContext {
+        +str schema_text
+        +list examples
+    }
+
+    class ContextBuilder {
+        <<Protocol>>
+        +build(request) QueryContext
+    }
+
+    class StaticSchemaContextBuilder {
+        +str schema_text
+        +build(request) QueryContext
+    }
+
+    class SQLGenerator {
+        +LLMProvider llm
+        +generate(request, context) SQLCandidate
+    }
+
+    class SQLCandidate {
+        +str sql
+        +str provider
+        +str model
+        +int attempt
+    }
+
+    class PolicyDecision {
+        +PolicyStatus status
+        +str code
+        +str reason
+    }
+
+    class ApprovedQuery {
+        +str sql
+        +PolicyDecision decision
+    }
+
+    class SQLValidatorApprover {
+        +approve(candidate) tuple
+    }
+
+    class QueryResult {
+        +str sql
+        +list rows
+        +int row_count
     }
 
     class LLMProvider {
@@ -242,7 +313,7 @@ classDiagram
     class QueryExecutorTool {
         +str database_url
         +bool check_readiness
-        +run(sql_or_decision) QueryToolResult
+        +run(query) QueryToolResult
     }
 
     class DemoDatabaseContract {
@@ -330,6 +401,7 @@ classDiagram
     }
 
     class AgentResult {
+        +str request_id
         +str question
         +AgentStatus status
         +str answer
@@ -344,6 +416,10 @@ classDiagram
         +SQLPolicyStatus? validation_status
         +str? policy_code
         +str? policy_reason
+    }
+
+    class AskDataResult {
+        +same public fields as AgentResult
     }
 
     class RunTrace {
@@ -378,18 +454,33 @@ classDiagram
 
     LLMProvider <|.. OpenAICompatibleLLMProvider
     OpenAICompatibleLLMProvider <|-- GroqLLMProvider
-    NL2SQLAgent --> AskDataGraph
+    NL2SQLAgent --> AskDataRuntime
+    AskDataRuntime --> AskDataGraph
     AskDataGraph --> AskDataGraphState
+    AskDataGraph --> AgentRequest
+    AskDataGraph --> ContextBuilder
+    StaticSchemaContextBuilder ..|> ContextBuilder
+    AskDataGraph --> SQLGenerator
+    SQLGenerator --> LLMProvider
+    SQLGenerator --> SQLCandidate
+    AskDataGraph --> SQLValidatorApprover
+    SQLValidatorApprover --> SQLCandidate
+    SQLValidatorApprover --> SQLPolicyDecision
+    SQLValidatorApprover --> ApprovedQuery
+    ApprovedQuery --> PolicyDecision
     AskDataGraph --> LLMProvider
     AskDataGraph --> QueryExecutorTool
     AskDataGraph --> TraceRecorder
     AskDataGraph --> TraceExporter
     AskDataGraph --> IntentPolicy
-    AskDataGraph --> SQLSafety
     AskDataGraph --> AgentResult
+    AskDataGraph --> QueryResult
+    AskDataResult <|-- AgentResult
     QueryExecutorTool --> SQLSafety
+    QueryExecutorTool --> ApprovedQuery
     QueryExecutorTool --> PostgresSupport
     QueryExecutorTool --> QueryToolResult
+    QueryToolResult --|> QueryResult
     PostgresSupport --> DemoDatabaseContract
     PostgresSupport --> DemoDatabaseReadiness
     DemoDatabaseNotReadyError --> DemoDatabaseReadiness
@@ -450,23 +541,26 @@ flowchart TD
 
 ## Evaluation Code Flow
 
-The eval runner wraps the existing agent; it does not create a second SQL
-generation or execution path. Reference and live runs both use local traces.
+The eval runner is an external driver of `AskDataRuntime`; it does not create a
+second SQL generation or execution path. Reference and live runs both use local
+traces.
 
 ```mermaid
 flowchart TD
     command["queryforge evals run"] --> load["load_suite and select_cases"]
     load --> contract["require_demo_database_ready and pinned contract check"]
     contract --> digest["database_content_digest of approved columns"]
-    digest --> calibrate["Reference SQL through QueryExecutorTool"]
-    calibrate --> reference_grade["rows_match against declared expected rows"]
+    digest --> calibrate["Reference SQL approved by SQLValidatorApprover"]
+    calibrate --> reference_exec["Reference SQL through QueryExecutorTool as ApprovedQuery"]
+    reference_exec --> reference_grade["rows_match against declared expected rows"]
     reference_grade --> fresh["Fresh agent, recording provider, recording executor per trial"]
-    fresh --> ask_graph["NL2SQLAgent.answer using normal AskDataGraph"]
-    ask_graph --> intent_check{"Normal intent policy"}
+    fresh --> request["AgentRequest(question, source=eval)"]
+    request --> runtime["AskDataRuntime.run using normal workflow"]
+    runtime --> intent_check{"Normal intent policy"}
     intent_check -- allowed --> mode{"Provider mode"}
     mode -- reference --> scripted["ReferenceProvider returns reference SQL"]
     mode -- live --> configured["create_llm_provider uses local configuration"]
-    scripted --> policy["Existing SQL validation and read-only execution policies"]
+    scripted --> policy["Existing SQL approval and read-only execution policies"]
     configured --> policy
     intent_check -- local rejection --> result["AgentResult and local trace"]
     policy --> result
@@ -525,6 +619,7 @@ classDiagram
     class EvaluationFunctions {
         +run_evaluations(suite_path, mode, split, ids, trials) dict
         +run_trial(case, trial_number, provider_factory, executor) dict
+        +approved_reference_query(sql) ApprovedQuery
         +database_content_digest(database_url) str
         +summarize(trials) dict
         +write_report(report, output_dir) Path
@@ -537,9 +632,12 @@ classDiagram
     ReferenceProvider ..|> LLMProvider
     RecordingProvider ..|> LLMProvider
     RecordingProvider --> LLMProvider
+    RecordingExecutor --> ApprovedQuery
     RecordingExecutor --> QueryExecutorTool
     EvaluationFunctions --> EvalSuite
-    EvaluationFunctions --> NL2SQLAgent
+    EvaluationFunctions --> AskDataRuntime
+    EvaluationFunctions --> AgentRequest
+    EvaluationFunctions --> ApprovedQuery
     EvaluationFunctions --> RecordingProvider
     EvaluationFunctions --> RecordingExecutor
     EvaluationFunctions --> GraderFunctions

@@ -17,7 +17,7 @@ import httpx
 import psycopg
 from psycopg import sql
 
-from queryforge.agent import NL2SQLAgent
+from queryforge.approval import SQLValidatorApprover
 from queryforge.demo_database import DEMO_TABLES
 from queryforge.eval_cases import (
     EvalCase,
@@ -28,10 +28,10 @@ from queryforge.eval_cases import (
     select_cases,
 )
 from queryforge.llm import LLMNotConfiguredError, LLMProvider, LLMProviderError, create_llm_provider
-from queryforge.models import QueryToolResult, SQLPolicyDecision
+from queryforge.models import AgentRequest, ApprovedQuery, QueryToolResult, SQLCandidate
 from queryforge.observability import redact_trace_payload
 from queryforge.postgres import get_database_url, require_demo_database_ready
-from queryforge.sql_safety import evaluate_sql_policy
+from queryforge.runtime import AskDataRuntime
 from queryforge.tools import QueryExecutorTool
 
 
@@ -84,7 +84,7 @@ class RecordingExecutor:
         self.executed_sql: list[str] = []
         self.error_category: str | None = None
 
-    def run(self, query: str | SQLPolicyDecision) -> QueryToolResult:
+    def run(self, query: ApprovedQuery) -> QueryToolResult:
         self.calls += 1
         try:
             result = self.executor.run(query)
@@ -99,6 +99,15 @@ class RecordingExecutor:
             raise
         self.executed_sql.append(result.sql)
         return result
+
+
+def approved_reference_query(sql: str) -> ApprovedQuery:
+    approved, decision = SQLValidatorApprover().approve(
+        SQLCandidate(sql=sql, provider="reference", model="reference-sql")
+    )
+    if approved is None:
+        raise EvalSetupError(f"reference_error: {decision.code}")
+    return approved
 
 
 def database_content_digest(database_url: str) -> str:
@@ -136,12 +145,12 @@ async def run_trial(
         provider = RecordingProvider(provider_factory())
         return provider
 
-    agent = NL2SQLAgent.from_provider_factory(resolve, tool)
+    runtime = AskDataRuntime(llm_resolver=resolve, query_tool=tool)
     started = perf_counter()
     result = None
     error = None
     try:
-        result = await agent.answer(case.question)
+        result = await runtime.run(AgentRequest(question=case.question, source="eval"))
     except httpx.TimeoutException:
         error = "provider_timeout"
     except httpx.HTTPError:
@@ -319,7 +328,7 @@ async def run_evaluations(
         for case in cases:
             if case.reference_sql is not None:
                 try:
-                    actual = reference_tool.run(evaluate_sql_policy(case.reference_sql))
+                    actual = reference_tool.run(approved_reference_query(case.reference_sql))
                 except Exception as exc:
                     raise EvalSetupError(f"reference_error:{case.id}:{type(exc).__name__}") from exc
                 matches = rows_match(actual.rows, case)

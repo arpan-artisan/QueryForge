@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 type SQLPolicyStatus = Literal["allowed", "blocked", "unsupported", "invalid"]
 type IntentPolicyStatus = Literal["allowed", "blocked", "unsupported", "clarification_required"]
@@ -27,39 +27,79 @@ type TraceStepStatus = Literal[
     "error",
     "skipped",
 ]
+type RequestSource = Literal["cli", "eval", "api", "ui"]
+type PolicyStatus = Literal["allowed", "blocked", "unsupported", "invalid", "clarification_required"]
 
 
 def generate_trace_id() -> str:
     return f"qf_{uuid4().hex}"
 
 
-class SQLPolicyDecision(BaseModel):
-    status: SQLPolicyStatus
+def generate_request_id() -> str:
+    return f"qfr_{uuid4().hex}"
+
+
+class QueryForgeModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class AgentRequest(QueryForgeModel):
+    question: str = Field(min_length=1)
+    request_id: str = Field(default_factory=generate_request_id)
+    source: RequestSource = "cli"
+    session_id: str | None = None
+
+
+class QueryContext(QueryForgeModel):
+    schema_text: str = Field(min_length=1)
+    examples: list[str] = Field(default_factory=list)
+
+
+class SQLCandidate(QueryForgeModel):
+    sql: str = Field(min_length=1)
+    provider: str
+    model: str
+    attempt: int = Field(default=1, ge=1)
+
+
+class PolicyDecision(QueryForgeModel):
+    status: PolicyStatus
     code: str
     reason: str
+
+
+class SQLPolicyDecision(PolicyDecision):
+    status: SQLPolicyStatus
     original_sql: str
     normalized_sql: str | None = None
 
 
-class IntentPolicyDecision(BaseModel):
+class IntentPolicyDecision(PolicyDecision):
     status: IntentPolicyStatus
-    code: str
-    reason: str
     category: IntentPolicyCategory
 
 
-class QueryToolResult(BaseModel):
+class ApprovedQuery(QueryForgeModel):
+    sql: str = Field(min_length=1)
+    decision: PolicyDecision
+
+
+class QueryResult(QueryForgeModel):
     sql: str
     rows: list[dict[str, Any]] = Field(default_factory=list)
     row_count: int = 0
 
 
-class TraceExportError(BaseModel):
+class QueryToolResult(QueryResult):
+    pass
+
+
+class TraceExportError(QueryForgeModel):
     provider: str
     message: str
 
 
-class TraceStep(BaseModel):
+class TraceStep(QueryForgeModel):
     name: str
     status: TraceStepStatus
     started_at: datetime
@@ -69,7 +109,7 @@ class TraceStep(BaseModel):
     error: str | None = None
 
 
-class RunTrace(BaseModel):
+class RunTrace(QueryForgeModel):
     trace_id: str
     question: str
     status: AgentStatus | None = None
@@ -81,7 +121,8 @@ class RunTrace(BaseModel):
     export_errors: list[TraceExportError] = Field(default_factory=list)
 
 
-class AgentResult(BaseModel):
+class AskDataResult(QueryForgeModel):
+    request_id: str = Field(default_factory=generate_request_id)
     question: str
     status: AgentStatus
     answer: str
@@ -99,3 +140,7 @@ class AgentResult(BaseModel):
     validation_status: SQLPolicyStatus | None = None
     policy_code: str | None = None
     policy_reason: str | None = None
+
+
+class AgentResult(AskDataResult):
+    pass

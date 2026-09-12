@@ -12,7 +12,7 @@ Both tools should eventually share the same foundation for LLM providers, databa
 Current scope is intentionally smaller: a local Ask Data NL2SQL CLI backed by Postgres.
 
 ```text
-question -> LangGraph AskDataGraph -> intent policy -> LLM provider -> candidate SQL -> SQL policy decision -> demo DB readiness -> read-only Postgres executor -> trace + result JSON
+question -> AskDataRuntime -> LangGraph AskDataGraph -> intent policy -> context builder -> LLM provider -> SQLCandidate -> SQL approval -> ApprovedQuery -> read-only Postgres executor -> trace + result JSON
 ```
 
 There is no frontend, public API, dashboard generation, persistent memory, multi-database support, or governance system yet.
@@ -85,7 +85,7 @@ Stable expected facts for future eval authors are documented in
 
 ## Ask Data Observability
 
-Ask Data now runs through `AskDataGraph`, a small LangGraph workflow with explicit stages for intent policy, provider resolution, LLM SQL generation, SQL validation, query execution, answer rendering, and final result assembly.
+Ask Data now enters through `AskDataRuntime`, the public single-turn runtime used by the CLI and eval harness. Internally it delegates orchestration to `AskDataGraph`, a small LangGraph workflow with explicit stages for intent policy, context building, provider resolution, LLM SQL generation, SQL validation, approval, query execution, answer rendering, and final result assembly.
 
 Every `queryforge ask` response includes:
 
@@ -121,7 +121,7 @@ state.
 Ask Data now has two local guardrail layers before any database work:
 
 1. **Intent policy** evaluates the user's original question before any LLM call.
-2. **SQL policy** validates generated SQL before execution, and the executor revalidates it.
+2. **SQL policy** validates generated SQL before execution, creates an `ApprovedQuery` only for allowed SQL, and the executor revalidates approved SQL before database access.
 
 The intent policy is deterministic and provider-agnostic. It can return:
 
@@ -151,7 +151,7 @@ The current SQL policy is allow-list based and still applies after allowed inten
 - Comments, stacked statements, mutating operations, data-modifying CTEs, `SELECT INTO`, locking clauses, system schemas, system tables, unapproved functions, and `SELECT *` are blocked.
 - Row-returning queries get a default `LIMIT 100`; larger static limits are capped at `100`.
 - Scalar aggregate queries such as `COUNT` or `SUM` are not force-limited because that would change the answer.
-- The executor revalidates SQL, checks demo database readiness, opens the read-only connection, and sets `statement_timeout` before running the validated SQL.
+- The executor accepts only `ApprovedQuery`, revalidates SQL, checks demo database readiness, opens the read-only connection, and sets `statement_timeout` before running the validated SQL.
 
 CLI result statuses:
 
@@ -174,7 +174,7 @@ expected values and a reference query that is checked against Postgres before
 trials begin.
 
 ```bash
-# Calibrate the harness and exercise the actual graph/DB without an LLM.
+# Calibrate the harness and exercise the actual runtime/DB without an LLM.
 uv run queryforge evals run
 
 # Measure the configured LLM using your existing .env credentials.

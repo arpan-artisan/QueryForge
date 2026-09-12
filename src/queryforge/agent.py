@@ -3,10 +3,11 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from queryforge.answers import MAX_ANSWER_PREVIEW_ROWS, render_rows_as_answer
-from queryforge.ask_data_graph import AskDataGraph, TraceRecorderFactory
+from queryforge.ask_data_graph import TraceRecorderFactory
 from queryforge.llm import LLMNotConfiguredError, LLMProvider
 from queryforge.models import AgentResult
 from queryforge.observability import DEFAULT_TRACE_PREVIEW_ROWS, TraceExporter
+from queryforge.runtime import AskDataRuntime
 from queryforge.tools import QueryExecutorTool
 
 __all__ = ["MAX_ANSWER_PREVIEW_ROWS", "NL2SQLAgent", "render_rows_as_answer"]
@@ -28,7 +29,7 @@ class NL2SQLAgent:
         self.llm: LLMProvider | None = llm
         self._llm_factory = llm_factory
         self.query_tool = query_tool
-        self._ask_data_graph = AskDataGraph(
+        self._runtime = AskDataRuntime(
             llm_resolver=self._resolve_llm,
             query_tool=query_tool,
             trace_recorder_factory=trace_recorder_factory,
@@ -56,7 +57,7 @@ class NL2SQLAgent:
         )
 
     async def answer(self, question: str) -> AgentResult:
-        return await self._ask_data_graph.run(question)
+        return await self._runtime.run(question)
 
     def _resolve_llm(self) -> LLMProvider:
         if self.llm is not None:

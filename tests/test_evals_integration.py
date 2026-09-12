@@ -7,13 +7,18 @@ import psycopg
 import pytest
 
 from queryforge.eval_cases import DEFAULT_SUITE, load_suite
-from queryforge.evals import ReferenceProvider, database_content_digest, run_evaluations, run_trial
+from queryforge.evals import (
+    ReferenceProvider,
+    approved_reference_query,
+    database_content_digest,
+    run_evaluations,
+    run_trial,
+)
 from queryforge.postgres import (
     DEFAULT_DATABASE_OWNER_URL,
     DEFAULT_DATABASE_QUERY_URL,
     require_demo_database_ready,
 )
-from queryforge.sql_safety import evaluate_sql_policy
 from queryforge.tools import QueryExecutorTool
 
 pytestmark = pytest.mark.skipif(
@@ -80,7 +85,7 @@ def test_monthly_revenue_sql_from_failed_live_eval_now_executes():
 )
 def test_numeric_casts_revalidate_and_execute(sql, expected):
     tool = QueryExecutorTool(DEFAULT_DATABASE_QUERY_URL)
-    result = tool.run(evaluate_sql_policy(sql))
+    result = tool.run(approved_reference_query(sql))
     assert result.rows == [{"value": expected}]
 
 
