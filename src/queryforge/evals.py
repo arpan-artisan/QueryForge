@@ -17,7 +17,7 @@ import httpx
 import psycopg
 from psycopg import sql
 
-from queryforge.approval import SQLValidatorApprover
+from queryforge.approval import approve_sql_candidate
 from queryforge.demo_database import DEMO_TABLES
 from queryforge.eval_cases import (
     EvalCase,
@@ -28,7 +28,7 @@ from queryforge.eval_cases import (
     select_cases,
 )
 from queryforge.llm import LLMNotConfiguredError, LLMProvider, LLMProviderError, create_llm_provider
-from queryforge.models import AgentRequest, ApprovedQuery, QueryToolResult, SQLCandidate
+from queryforge.models import AgentRequest, ApprovedQuery, QueryResult, SQLCandidate
 from queryforge.observability import redact_trace_payload
 from queryforge.postgres import get_database_url, require_demo_database_ready
 from queryforge.runtime import AskDataRuntime
@@ -84,7 +84,7 @@ class RecordingExecutor:
         self.executed_sql: list[str] = []
         self.error_category: str | None = None
 
-    def run(self, query: ApprovedQuery) -> QueryToolResult:
+    def run(self, query: ApprovedQuery) -> QueryResult:
         self.calls += 1
         try:
             result = self.executor.run(query)
@@ -102,7 +102,7 @@ class RecordingExecutor:
 
 
 def approved_reference_query(sql: str) -> ApprovedQuery:
-    approved, decision = SQLValidatorApprover().approve(
+    approved, decision = approve_sql_candidate(
         SQLCandidate(sql=sql, provider="reference", model="reference-sql")
     )
     if approved is None:
@@ -379,26 +379,14 @@ async def run_evaluations(
 
 
 def _redact_report(report: dict) -> dict:
-    secrets = [
+    secrets = {
         value
         for key, value in os.environ.items()
         if value
         and len(value) >= 4
         and any(word in key.upper() for word in ("KEY", "TOKEN", "SECRET", "PASSWORD", "URL"))
-    ]
-
-    def scrub(value):
-        if isinstance(value, str):
-            for secret in sorted(secrets, key=len, reverse=True):
-                value = value.replace(secret, "[REDACTED]")
-            return value
-        if isinstance(value, dict):
-            return {key: scrub(child) for key, child in value.items()}
-        if isinstance(value, list):
-            return [scrub(child) for child in value]
-        return value
-
-    return redact_trace_payload(scrub(report))
+    }
+    return redact_trace_payload(report, extra_secret_values=secrets)
 
 
 def write_report(report: dict, output_dir: Path) -> Path:

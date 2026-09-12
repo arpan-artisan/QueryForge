@@ -140,13 +140,6 @@ def evaluate_sql_policy(sql: str) -> SQLPolicyDecision:
     )
 
 
-def validate_select_sql(sql: str) -> str:
-    decision = evaluate_sql_policy(sql)
-    if decision.status == "allowed" and decision.normalized_sql is not None:
-        return decision.normalized_sql
-    raise SQLSafetyError(decision.reason, decision)
-
-
 def _validate_ast(expression: exp.Select, original_sql: str) -> SQLPolicyDecision | None:
     for set_expression in expression.find_all(*SET_OPERATION_TYPES):
         return _blocked(

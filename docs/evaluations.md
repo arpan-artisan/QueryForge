@@ -31,7 +31,7 @@ and invented tables) additionally exercise downstream guardrails in pytest.
 | `reference` (default) | A scripted provider returns the reference SQL | The references, harness, graph, guardrails, and database work together |
 | `live` | The existing configured LLM connector, currently Groq | This model and the current agent answered these selected questions correctly |
 
-Both run `NL2SQLAgent` and the existing LangGraph. Both use normal schema context,
+Both run `AskDataRuntime` and the existing LangGraph. Both use normal schema context,
 intent checks, SQL checks, read-only executor, row limits, readiness checks, and
 local traces. Reference SQL and expected rows are never added to live prompts.
 Neither mode exports to Langfuse: transcripts are local so exporter/network

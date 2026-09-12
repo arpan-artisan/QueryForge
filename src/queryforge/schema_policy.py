@@ -61,10 +61,6 @@ def approved_columns(table_name: str) -> frozenset[str]:
     return APPROVED_TABLES[table_name]
 
 
-def is_approved_column(table_name: str, column_name: str) -> bool:
-    return column_name in APPROVED_TABLES.get(table_name, frozenset())
-
-
 def is_approved_function(function_name: str) -> bool:
     return function_name in APPROVED_FUNCTIONS
 

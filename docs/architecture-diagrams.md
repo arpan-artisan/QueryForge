@@ -128,7 +128,7 @@ flowchart TD
     intent_decision -- clarification_required --> skip_intent
 
     intent_decision -- allowed --> context_node["context_build node"]
-    context_node --> context_builder["StaticSchemaContextBuilder.build(request)"]
+    context_node --> context_builder["build_query_context(request)"]
     context_builder --> query_context["QueryContext(schema_text, examples)"]
 
     query_context --> provider_node["provider_resolution node"]
@@ -139,13 +139,13 @@ flowchart TD
     provider_factory -. missing provider config .-> skip_provider["Record provider error and skipped generation, validation, approval, and DB work"]
 
     llm --> generation_node["llm_sql_generation node"]
-    generation_node --> generator["SQLGenerator.generate(request, context)"]
+    generation_node --> generator["generate_sql_candidate(llm, request, context)"]
     generator --> llm_call["llm.generate_sql(question, context.schema_text)"]
     llm_call --> candidate["SQLCandidate(sql, provider, model, attempt)"]
     llm_call -. provider unsupported or error .-> skip_generation["Record generation failure and skipped validation, approval, and DB work"]
 
     candidate --> validation_node["sql_validation node"]
-    validation_node --> approver["SQLValidatorApprover.approve(candidate)"]
+    validation_node --> approver["approve_sql_candidate(candidate)"]
     approver --> policy["evaluate_sql_policy(candidate.sql)"]
     policy --> cast_policy["AST safety: approved cast targets and bounded modifiers; nested operands still checked"]
     cast_policy --> sql_decision{"SQLPolicyDecision.status"}
@@ -200,14 +200,8 @@ classDiagram
         +run(request) AskDataResult
     }
 
-    class NL2SQLAgent {
-        +AskDataRuntime _runtime
-        +from_provider_factory(llm_factory, query_tool, trace_exporter, trace_preview_rows) NL2SQLAgent
-        +answer(question) AgentResult
-    }
-
     class AskDataGraph {
-        +run(request) AgentResult
+        +run(request) AskDataResult
         +evaluate_intent(state) dict
         +build_context(state) dict
         +resolve_provider(state) dict
@@ -215,7 +209,7 @@ classDiagram
         +validate_sql(state) dict
         +execute_query(state) dict
         +render_answer(state) dict
-        +finalize_result(state) AgentResult
+        +finalize_result(state) AskDataResult
     }
 
     class AskDataGraphState {
@@ -232,7 +226,7 @@ classDiagram
         +QueryResult? query_result
         +IntentPolicyDecision? intent_decision
         +SQLPolicyDecision? sql_decision
-        +AgentResult? result
+        +AskDataResult? result
     }
 
     class AgentRequest {
@@ -247,19 +241,12 @@ classDiagram
         +list examples
     }
 
-    class ContextBuilder {
-        <<Protocol>>
-        +build(request) QueryContext
+    class ContextFunctions {
+        +build_query_context(request, schema_text) QueryContext
     }
 
-    class StaticSchemaContextBuilder {
-        +str schema_text
-        +build(request) QueryContext
-    }
-
-    class SQLGenerator {
-        +LLMProvider llm
-        +generate(request, context) SQLCandidate
+    class GenerationFunctions {
+        +generate_sql_candidate(llm, request, context) SQLCandidate
     }
 
     class SQLCandidate {
@@ -280,8 +267,8 @@ classDiagram
         +PolicyDecision decision
     }
 
-    class SQLValidatorApprover {
-        +approve(candidate) tuple
+    class ApprovalFunctions {
+        +approve_sql_candidate(candidate) tuple
     }
 
     class QueryResult {
@@ -313,7 +300,7 @@ classDiagram
     class QueryExecutorTool {
         +str database_url
         +bool check_readiness
-        +run(query) QueryToolResult
+        +run(query) QueryResult
     }
 
     class DemoDatabaseContract {
@@ -369,10 +356,6 @@ classDiagram
         +snapshot() RunTrace
     }
 
-    class NoOpTraceRecorder {
-        +record local trace only
-    }
-
     class TraceExporter {
         <<Protocol>>
         +str provider_name
@@ -400,7 +383,7 @@ classDiagram
         +list warnings
     }
 
-    class AgentResult {
+    class AskDataResult {
         +str request_id
         +str question
         +AgentStatus status
@@ -416,10 +399,6 @@ classDiagram
         +SQLPolicyStatus? validation_status
         +str? policy_code
         +str? policy_reason
-    }
-
-    class AskDataResult {
-        +same public fields as AgentResult
     }
 
     class RunTrace {
@@ -449,48 +428,42 @@ classDiagram
 
     class SQLSafety {
         +evaluate_sql_policy(sql) SQLPolicyDecision
-        +validate_select_sql(sql) str
     }
 
     LLMProvider <|.. OpenAICompatibleLLMProvider
     OpenAICompatibleLLMProvider <|-- GroqLLMProvider
-    NL2SQLAgent --> AskDataRuntime
     AskDataRuntime --> AskDataGraph
     AskDataGraph --> AskDataGraphState
     AskDataGraph --> AgentRequest
-    AskDataGraph --> ContextBuilder
-    StaticSchemaContextBuilder ..|> ContextBuilder
-    AskDataGraph --> SQLGenerator
-    SQLGenerator --> LLMProvider
-    SQLGenerator --> SQLCandidate
-    AskDataGraph --> SQLValidatorApprover
-    SQLValidatorApprover --> SQLCandidate
-    SQLValidatorApprover --> SQLPolicyDecision
-    SQLValidatorApprover --> ApprovedQuery
+    AskDataGraph --> ContextFunctions
+    AskDataGraph --> GenerationFunctions
+    GenerationFunctions --> LLMProvider
+    GenerationFunctions --> SQLCandidate
+    AskDataGraph --> ApprovalFunctions
+    ApprovalFunctions --> SQLCandidate
+    ApprovalFunctions --> SQLPolicyDecision
+    ApprovalFunctions --> ApprovedQuery
     ApprovedQuery --> PolicyDecision
     AskDataGraph --> LLMProvider
     AskDataGraph --> QueryExecutorTool
     AskDataGraph --> TraceRecorder
     AskDataGraph --> TraceExporter
     AskDataGraph --> IntentPolicy
-    AskDataGraph --> AgentResult
+    AskDataGraph --> AskDataResult
     AskDataGraph --> QueryResult
-    AskDataResult <|-- AgentResult
     QueryExecutorTool --> SQLSafety
     QueryExecutorTool --> ApprovedQuery
     QueryExecutorTool --> PostgresSupport
-    QueryExecutorTool --> QueryToolResult
-    QueryToolResult --|> QueryResult
+    QueryExecutorTool --> QueryResult
     PostgresSupport --> DemoDatabaseContract
     PostgresSupport --> DemoDatabaseReadiness
     DemoDatabaseNotReadyError --> DemoDatabaseReadiness
     LocalTraceRecorder ..|> TraceRecorder
-    NoOpTraceRecorder --|> LocalTraceRecorder
     NoOpTraceExporter ..|> TraceExporter
     LangfuseTraceExporter ..|> TraceExporter
     LocalTraceRecorder --> RunTrace
     RunTrace --> TraceStep
-    AgentResult --> RunTrace
+    AskDataResult --> RunTrace
 ```
 
 ## User Action Diagram
@@ -550,7 +523,7 @@ flowchart TD
     command["queryforge evals run"] --> load["load_suite and select_cases"]
     load --> contract["require_demo_database_ready and pinned contract check"]
     contract --> digest["database_content_digest of approved columns"]
-    digest --> calibrate["Reference SQL approved by SQLValidatorApprover"]
+    digest --> calibrate["Reference SQL approved by approve_sql_candidate"]
     calibrate --> reference_exec["Reference SQL through QueryExecutorTool as ApprovedQuery"]
     reference_exec --> reference_grade["rows_match against declared expected rows"]
     reference_grade --> fresh["Fresh agent, recording provider, recording executor per trial"]
@@ -562,7 +535,7 @@ flowchart TD
     mode -- live --> configured["create_llm_provider uses local configuration"]
     scripted --> policy["Existing SQL approval and read-only execution policies"]
     configured --> policy
-    intent_check -- local rejection --> result["AgentResult and local trace"]
+    intent_check -- local rejection --> result["AskDataResult and local trace"]
     policy --> result
     result --> grades["grade_result: status, safety, results, diagnostics"]
     grades --> unchanged["Check content digest after trial"]
@@ -614,7 +587,7 @@ classDiagram
         +QueryExecutorTool executor
         +int calls
         +list executed_sql
-        +run(query) QueryToolResult
+        +run(query) QueryResult
     }
     class EvaluationFunctions {
         +run_evaluations(suite_path, mode, split, ids, trials) dict
@@ -641,7 +614,7 @@ classDiagram
     EvaluationFunctions --> RecordingProvider
     EvaluationFunctions --> RecordingExecutor
     EvaluationFunctions --> GraderFunctions
-    GraderFunctions --> AgentResult
+    GraderFunctions --> AskDataResult
     GraderFunctions --> EvalCase
     GraderFunctions --> Grade
 ```

@@ -2,9 +2,7 @@ import pytest
 
 from queryforge.sql_safety import (
     DEFAULT_ROW_LIMIT,
-    SQLSafetyError,
     evaluate_sql_policy,
-    validate_select_sql,
 )
 
 
@@ -232,15 +230,19 @@ def test_malformed_sql_is_invalid() -> None:
     assert decision.code == "parse_error"
 
 
-def test_compatibility_helper_returns_sql_only_for_allowed_decisions() -> None:
-    sql = validate_select_sql("SELECT id FROM orders")
+def test_allowed_policy_returns_normalized_sql() -> None:
+    decision = evaluate_sql_policy("SELECT id FROM orders")
 
-    assert sql.endswith(f"LIMIT {DEFAULT_ROW_LIMIT}")
+    assert decision.status == "allowed"
+    assert decision.normalized_sql is not None
+    assert decision.normalized_sql.endswith(f"LIMIT {DEFAULT_ROW_LIMIT}")
 
 
-def test_compatibility_helper_raises_for_non_allowed_decisions() -> None:
-    with pytest.raises(SQLSafetyError):
-        validate_select_sql("DROP TABLE orders")
+def test_non_allowed_policy_does_not_return_executable_sql() -> None:
+    decision = evaluate_sql_policy("DROP TABLE orders")
+
+    assert decision.status == "blocked"
+    assert decision.normalized_sql is None
 
 
 def test_row_returning_queries_get_default_limit() -> None:

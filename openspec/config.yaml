@@ -40,6 +40,14 @@ context: |
   interfaces easier to add. Add abstractions only when they protect a real
   extension point or remove meaningful coupling.
 
+  Code should also follow ponytail principles for every implementation pass:
+  read the touched flow first, prefer deletion and existing code, use the
+  standard library or native platform behavior before custom code, and avoid
+  speculative abstractions. Do not simplify away trust-boundary protections
+  such as intent policy, SQL validation, approved-query enforcement, read-only
+  execution, secret handling, observability needed for debugging, or useful
+  tests for non-trivial logic.
+
 rules:
   proposal:
     - Keep each change focused on one intent that can be stated in one sentence.
@@ -47,6 +55,7 @@ rules:
     - Prefer small vertical slices over broad platform rewrites.
     - List capability paths in kebab-case and avoid inventing specs for pure implementation details.
     - Call out whether a change affects safety, database execution, LLM behavior, or public interfaces.
+    - Prefer the smallest change that satisfies the current behavior; avoid speculative features, abstractions, dependencies, and scaffolding.
     - Never include real API keys, tokens, credentials, connection passwords, or other secrets in proposals, specs, design, tasks, examples, tests, or committed files.
 
   specs:
@@ -55,12 +64,14 @@ rules:
     - Include negative scenarios for unsafe SQL, bad LLM output, database errors, or policy rejection when relevant.
     - Do not bake implementation details into requirements unless they are externally observable behavior.
     - Preserve the invariant that memory, LLM output, and retrieved examples can provide context but cannot bypass validation.
+    - "Keep specs focused on observable behavior; for pure refactors, use `skip_specs: true` instead of inventing requirements."
     - Secret-bearing configuration must be local-only or environment-provided; committed example files may contain placeholders only.
 
   design:
     - Include a simple data-flow diagram or ordered flow for agent changes.
     - When a change alters execution flow, core classes, result models, statuses, CLI commands, setup steps, or user-visible behavior, update `docs/architecture-diagrams.md` or explicitly state why no diagram update is needed.
     - Prefer modular boundaries aligned with SOLID principles; separate provider access, validation policy, execution, result contracts, and orchestration unless a simpler boundary is clearly sufficient.
+    - "Apply ponytail before adding abstractions: reuse existing code, prefer functions over one-method classes, and add extension points only when a real second implementation exists or a trust boundary needs it."
     - State trust boundaries explicitly, especially between LLM output, validation, and database execution.
     - Describe provider-agnostic interfaces before provider-specific connectors.
     - Document alternatives considered and why the chosen approach is smaller or safer.
@@ -68,6 +79,7 @@ rules:
 
   tasks:
     - Keep tasks small enough to implement and verify independently.
+    - Include deletion or simplification tasks when existing code can satisfy the change with less surface area.
     - Every feature slice must include focused tests for its new success path, failure path, and important edge cases before it can be marked complete.
     - Tie tasks back to requirements when possible.
     - Include tests for safety-critical and error-path behavior.
@@ -83,6 +95,8 @@ operations:
       - Preserve provider-agnostic boundaries; do not couple the agent directly to Groq or Postgres-specific code when an interface is intended.
       - Keep safety checks outside the LLM provider; the LLM is not the guardrail.
       - "Preserve SOLID-aligned module boundaries: providers generate candidates, policy validates, executors execute approved SQL, models define contracts, and the agent orchestrates."
+      - "Apply ponytail full by default: inspect the real flow, prefer deletion or reuse, avoid one-implementation abstractions, and keep the diff as small as correctness allows."
+      - Do not simplify away trust-boundary protections, safety checks, secret handling, or non-trivial tests.
       - Do not commit real secrets to git or GitHub; use ignored `.env` files, shell environment variables, or placeholder-only examples.
       - If implementation changes execution flow, core classes, result models, statuses, CLI commands, setup steps, or user-visible behavior, update `docs/architecture-diagrams.md` and verify the diagrams still match the code.
       - After each feature slice, add or update relevant test cases and run the focused tests for that slice before marking its task complete.

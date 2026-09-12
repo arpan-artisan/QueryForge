@@ -3,14 +3,14 @@ from typing import Self
 import pytest
 
 from queryforge import tools
-from queryforge.approval import SQLValidatorApprover
+from queryforge.approval import approve_sql_candidate
 from queryforge.models import ApprovedQuery, PolicyDecision, SQLCandidate, SQLPolicyDecision
 from queryforge.sql_safety import SQLSafetyError
 from queryforge.tools import QueryExecutorTool
 
 
 def _approve(sql: str) -> ApprovedQuery:
-    approved, decision = SQLValidatorApprover().approve(
+    approved, decision = approve_sql_candidate(
         SQLCandidate(sql=sql, provider="test", model="test")
     )
     assert decision.status == "allowed"

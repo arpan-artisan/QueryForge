@@ -186,10 +186,6 @@ class LocalTraceRecorder:
         return self.trace.model_copy(deep=True)
 
 
-class NoOpTraceRecorder(LocalTraceRecorder):
-    """Local trace recorder with no external export side effects."""
-
-
 class NoOpTraceExporter:
     provider_name = "local"
 
@@ -380,21 +376,26 @@ def _configured_secret(raw_value: str | None) -> str | None:
     return value
 
 
-def redact_trace_payload(value: Any) -> Any:
+def redact_trace_payload(value: Any, extra_secret_values: set[str] | None = None) -> Any:
     if isinstance(value, dict):
         return {
-            key: REDACTED if _is_sensitive_key(str(key)) else redact_trace_payload(child)
+            key: REDACTED
+            if _is_sensitive_key(str(key))
+            else redact_trace_payload(child, extra_secret_values)
             for key, child in value.items()
         }
 
     if isinstance(value, list):
-        return [redact_trace_payload(child) for child in value]
+        return [redact_trace_payload(child, extra_secret_values) for child in value]
 
     if isinstance(value, tuple):
-        return [redact_trace_payload(child) for child in value]
+        return [redact_trace_payload(child, extra_secret_values) for child in value]
 
     if isinstance(value, str) and _looks_like_secret_value(value):
         return REDACTED
+    if isinstance(value, str) and extra_secret_values:
+        for secret in sorted(extra_secret_values, key=len, reverse=True):
+            value = value.replace(secret, REDACTED)
 
     return value
 

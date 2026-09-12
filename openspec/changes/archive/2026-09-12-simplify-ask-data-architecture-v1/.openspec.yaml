@@ -1,0 +1,5 @@
+schema: spec-driven
+created: 2026-09-12
+goal: Reduce Ask Data internal bloat without changing CLI, eval, trace, SQL
+  safety, or database behavior.
+skip_specs: true

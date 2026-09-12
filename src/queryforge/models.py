@@ -90,10 +90,6 @@ class QueryResult(QueryForgeModel):
     row_count: int = 0
 
 
-class QueryToolResult(QueryResult):
-    pass
-
-
 class TraceExportError(QueryForgeModel):
     provider: str
     message: str
@@ -140,7 +136,3 @@ class AskDataResult(QueryForgeModel):
     validation_status: SQLPolicyStatus | None = None
     policy_code: str | None = None
     policy_reason: str | None = None
-
-
-class AgentResult(AskDataResult):
-    pass

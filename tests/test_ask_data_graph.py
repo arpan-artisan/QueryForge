@@ -5,7 +5,7 @@ import pytest
 
 from queryforge.ask_data_graph import AskDataGraph
 from queryforge.llm import LLMNotConfiguredError, LLMProviderError, LLMUnsupportedQuestionError
-from queryforge.models import ApprovedQuery, QueryToolResult
+from queryforge.models import ApprovedQuery, QueryResult
 from queryforge.observability import LocalTraceRecorder
 from queryforge.postgres import DemoDatabaseNotReadyError, DemoDatabaseReadiness
 
@@ -41,10 +41,10 @@ class StubQueryTool:
         self.rows = rows or [{"order_count": 3}]
         self.calls: list[ApprovedQuery] = []
 
-    def run(self, query: ApprovedQuery) -> QueryToolResult:
+    def run(self, query: ApprovedQuery) -> QueryResult:
         assert isinstance(query, ApprovedQuery)
         self.calls.append(query)
-        return QueryToolResult(
+        return QueryResult(
             sql=query.sql,
             rows=self.rows,
             row_count=len(self.rows),
@@ -55,7 +55,7 @@ class FailingQueryTool:
     def __init__(self) -> None:
         self.calls: list[ApprovedQuery] = []
 
-    def run(self, query: ApprovedQuery) -> QueryToolResult:
+    def run(self, query: ApprovedQuery) -> QueryResult:
         assert isinstance(query, ApprovedQuery)
         self.calls.append(query)
         raise psycopg.OperationalError("database unavailable")
@@ -66,7 +66,7 @@ class NotReadyQueryTool:
         self.readiness = readiness
         self.calls: list[ApprovedQuery] = []
 
-    def run(self, query: ApprovedQuery) -> QueryToolResult:
+    def run(self, query: ApprovedQuery) -> QueryResult:
         assert isinstance(query, ApprovedQuery)
         self.calls.append(query)
         raise DemoDatabaseNotReadyError(self.readiness)

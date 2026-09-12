@@ -3,13 +3,14 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from queryforge.ask_data_graph import AskDataGraph, TraceRecorderFactory
-from queryforge.context import ContextBuilder, StaticSchemaContextBuilder
+from queryforge.context import build_query_context
 from queryforge.llm import LLMProvider
-from queryforge.models import AgentRequest, AskDataResult
+from queryforge.models import AgentRequest, AskDataResult, QueryContext
 from queryforge.observability import DEFAULT_TRACE_PREVIEW_ROWS, TraceExporter
 from queryforge.tools import QueryExecutorTool
 
 type LLMResolver = Callable[[], LLMProvider]
+type ContextBuilder = Callable[[AgentRequest], QueryContext]
 
 
 class AskDataRuntime:
@@ -26,7 +27,7 @@ class AskDataRuntime:
         self._graph = AskDataGraph(
             llm_resolver=llm_resolver,
             query_tool=query_tool,
-            context_builder=context_builder or StaticSchemaContextBuilder(),
+            context_builder=context_builder or build_query_context,
             trace_recorder_factory=trace_recorder_factory,
             trace_exporter=trace_exporter,
             trace_preview_rows=trace_preview_rows,

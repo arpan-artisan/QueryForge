@@ -5,7 +5,7 @@ import pytest
 
 from queryforge import cli
 from queryforge.llm import LLMNotConfiguredError
-from queryforge.models import ApprovedQuery, QueryToolResult
+from queryforge.models import ApprovedQuery, QueryResult
 from queryforge.observability import NoOpTraceExporter, ObservabilityConfig
 from queryforge.postgres import DemoDatabaseReadiness
 
@@ -22,9 +22,9 @@ class StubLLM:
 
 
 class StubQueryTool:
-    def run(self, query: ApprovedQuery) -> QueryToolResult:
+    def run(self, query: ApprovedQuery) -> QueryResult:
         assert isinstance(query, ApprovedQuery)
-        return QueryToolResult(sql=query.sql, rows=[{"order_count": 3}], row_count=1)
+        return QueryResult(sql=query.sql, rows=[{"order_count": 3}], row_count=1)
 
 
 @pytest.fixture(autouse=True)

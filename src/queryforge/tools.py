@@ -7,7 +7,7 @@ from typing import Any
 import psycopg
 from psycopg.rows import dict_row
 
-from queryforge.models import ApprovedQuery, QueryToolResult
+from queryforge.models import ApprovedQuery, QueryResult
 from queryforge.postgres import get_database_url, require_demo_database_ready
 from queryforge.sql_safety import SQLSafetyError, evaluate_sql_policy
 
@@ -21,7 +21,7 @@ class QueryExecutorTool:
         self.database_url = database_url or get_database_url()
         self.check_readiness = check_readiness
 
-    def run(self, query: ApprovedQuery) -> QueryToolResult:
+    def run(self, query: ApprovedQuery) -> QueryResult:
         validated_sql = _allowed_normalized_sql(query)
         if self.check_readiness:
             require_demo_database_ready(self.database_url)
@@ -31,7 +31,7 @@ class QueryExecutorTool:
             rows = cursor.fetchall()
 
         jsonable_rows = [_jsonable_row(row) for row in rows]
-        return QueryToolResult(sql=validated_sql, rows=jsonable_rows, row_count=len(jsonable_rows))
+        return QueryResult(sql=validated_sql, rows=jsonable_rows, row_count=len(jsonable_rows))
 
 
 def _allowed_normalized_sql(query: ApprovedQuery) -> str:

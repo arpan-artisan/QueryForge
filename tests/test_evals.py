@@ -17,7 +17,7 @@ from queryforge.eval_cases import (
     select_cases,
 )
 from queryforge.llm import LLMNotConfiguredError, LLMProviderError
-from queryforge.models import AgentResult, ApprovedQuery, QueryToolResult
+from queryforge.models import ApprovedQuery, AskDataResult, QueryResult
 from queryforge.postgres import DemoDatabaseReadiness
 from queryforge.schema import SCHEMA_CONTEXT
 from queryforge.sql_safety import SQLSafetyError, evaluate_sql_policy
@@ -45,7 +45,7 @@ class FakeExecutor:
         assert isinstance(query, ApprovedQuery)
         statement = query.sql
         assert evaluate_sql_policy(statement).status == "allowed"
-        return QueryToolResult(sql=statement, rows=self.rows, row_count=len(self.rows))
+        return QueryResult(sql=statement, rows=self.rows, row_count=len(self.rows))
 
 
 def test_curated_suite_balanced_explicit_and_policy_valid():
@@ -140,7 +140,7 @@ def test_normal_graph_and_alias_independent_grading():
     )
     assert trial["passed"]
     assert trial["model_calls"] == trial["executor_calls"] == 1
-    result = AgentResult.model_validate(trial["result"])
+    result = AskDataResult.model_validate(trial["result"])
     result.trace.steps.reverse()
     assert grade_result(
         case, result, model_calls=1, executor_calls=1, executed_sql=trial["executed_sql"]
@@ -193,7 +193,7 @@ def test_policy_cases_need_no_provider_and_detect_unnecessary_calls():
         trial = asyncio.run(evals.run_trial(case, 1, forbidden, FakeExecutor()))
         assert trial["passed"], case.id
         assert trial["model_calls"] == trial["executor_calls"] == 0
-        result = AgentResult.model_validate(trial["result"])
+        result = AskDataResult.model_validate(trial["result"])
         grades = grade_result(case, result, model_calls=1, executor_calls=0, executed_sql=[])
         assert not grades["safety"].passed
 

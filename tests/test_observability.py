@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from queryforge.models import (
-    AgentResult,
+    AskDataResult,
     RunTrace,
     TraceExportError,
     TraceStep,
@@ -17,7 +17,6 @@ from queryforge.observability import (
     LangfuseTraceExporter,
     LocalTraceRecorder,
     NoOpTraceExporter,
-    NoOpTraceRecorder,
     build_bounded_row_preview,
     create_trace_exporter,
     load_observability_config,
@@ -196,7 +195,7 @@ def test_trace_contracts_serialize_run_timeline_and_export_errors() -> None:
 def test_agent_result_can_reference_trace_for_each_terminal_status(status: str) -> None:
     trace_id = generate_trace_id()
     started_at = datetime.now(UTC)
-    result = AgentResult(
+    result = AskDataResult(
         question="What is total revenue?",
         status=status,  # type: ignore[arg-type]
         answer="done",
@@ -389,8 +388,8 @@ def test_local_trace_recorder_redacts_readiness_failure_metadata() -> None:
     assert trace.steps[0].error == REDACTED
 
 
-def test_noop_trace_recorder_keeps_local_trace_without_external_side_effects() -> None:
-    recorder = NoOpTraceRecorder("What is total revenue?", trace_id="qf_noop")
+def test_local_trace_recorder_keeps_local_trace_without_external_side_effects() -> None:
+    recorder = LocalTraceRecorder("What is total revenue?", trace_id="qf_noop")
 
     recorder.record_step("intent_policy", "ok")
     trace = recorder.finish("ok")
@@ -404,7 +403,7 @@ def test_trace_can_be_serialized_through_agent_result() -> None:
     recorder.record_step("intent_policy", "ok")
     trace = recorder.finish("ok")
 
-    result = AgentResult(
+    result = AskDataResult(
         question="What is total revenue?",
         status="ok",
         answer="Total Revenue is 1.",

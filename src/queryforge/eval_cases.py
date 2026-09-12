@@ -11,7 +11,7 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from queryforge.models import AgentResult
+from queryforge.models import AskDataResult
 from queryforge.sql_safety import evaluate_sql_policy
 
 DEFAULT_SUITE = Path(__file__).resolve().parents[2] / "evals" / "ask-data" / "cases.json"
@@ -172,7 +172,7 @@ def _perfect_matching(edges: list[list[int]]) -> bool:
 
 def grade_result(
     case: EvalCase,
-    result: AgentResult,
+    result: AskDataResult,
     *,
     model_calls: int,
     executor_calls: int,
