@@ -23,6 +23,21 @@ class StubLLM:
         return self.sql
 
 
+class QueueLLM:
+    provider_name = "stub"
+    model_name = "queued"
+
+    def __init__(self, outputs: list[str]) -> None:
+        self.outputs = outputs
+        self.calls: list[tuple[str, str]] = []
+
+    async def generate_sql(self, question: str, schema_context: str) -> str:
+        self.calls.append((question, schema_context))
+        if not self.outputs:
+            raise AssertionError("Unexpected extra model call")
+        return self.outputs.pop(0)
+
+
 class FailingLLM:
     provider_name = "stub"
     model_name = "failing"
@@ -52,13 +67,26 @@ class StubQueryTool:
 
 
 class FailingQueryTool:
+    def __init__(self, error: psycopg.Error | None = None) -> None:
+        self.calls: list[ApprovedQuery] = []
+        self.error = error or psycopg.OperationalError("database unavailable")
+
+    def run(self, query: ApprovedQuery) -> QueryResult:
+        assert isinstance(query, ApprovedQuery)
+        self.calls.append(query)
+        raise self.error
+
+
+class FailsThenSucceedsQueryTool:
     def __init__(self) -> None:
         self.calls: list[ApprovedQuery] = []
 
     def run(self, query: ApprovedQuery) -> QueryResult:
         assert isinstance(query, ApprovedQuery)
         self.calls.append(query)
-        raise psycopg.OperationalError("database unavailable")
+        if len(self.calls) == 1:
+            raise psycopg.errors.AmbiguousColumn("column reference is ambiguous")
+        return QueryResult(sql=query.sql, rows=[{"order_count": 3}], row_count=1)
 
 
 class NotReadyQueryTool:
@@ -375,6 +403,7 @@ def test_ask_data_graph_sql_unsupported_skips_database() -> None:
     assert query_tool.calls == []
     assert result.trace is not None
     assert _step_status(result, "sql_validation") == "unsupported"
+    assert _step_status(result, "sql_repair_eligibility") == "skipped"
     assert _step_status(result, "query_execution") == "skipped"
 
 
@@ -390,7 +419,113 @@ def test_ask_data_graph_sql_invalid_skips_database() -> None:
     assert query_tool.calls == []
     assert result.trace is not None
     assert _step_status(result, "sql_validation") == "invalid"
+    assert _step_status(result, "sql_repair_eligibility") == "ok"
+    assert _step_status(result, "sql_repair_generation") == "ok"
     assert _step_status(result, "query_execution") == "skipped"
+
+
+def test_ask_data_graph_repairs_validation_failure_before_execution() -> None:
+    llm = QueueLLM(
+        [
+            "SELECT product_name FROM order_items",
+            "SELECT COUNT(*) AS order_count FROM orders",
+        ]
+    )
+    query_tool = StubQueryTool()
+    graph = AskDataGraph(llm_resolver=lambda: llm, query_tool=query_tool)  # type: ignore[arg-type]
+
+    result = asyncio.run(graph.run("What is total revenue?"))
+
+    assert result.status == "ok"
+    assert result.sql == "SELECT COUNT(*) AS order_count FROM orders"
+    assert result.trace is not None
+    assert len(llm.calls) == 2
+    assert len(query_tool.calls) == 1
+    assert _step_status(result, "sql_repair_eligibility") == "ok"
+    assert _step_status(result, "sql_repair_generation") == "ok"
+    generated = [
+        step.metadata["generated_sql"]
+        for step in result.trace.steps
+        if step.name in {"llm_sql_generation", "sql_repair_generation"}
+    ]
+    assert generated == [
+        "SELECT product_name FROM order_items",
+        "SELECT COUNT(*) AS order_count FROM orders",
+    ]
+
+
+def test_ask_data_graph_revalidates_repaired_sql_and_blocks_unsafe_repair() -> None:
+    llm = QueueLLM(["SELECT bad_column FROM orders", "DROP TABLE orders"])
+    query_tool = StubQueryTool()
+    graph = AskDataGraph(llm_resolver=lambda: llm, query_tool=query_tool)  # type: ignore[arg-type]
+
+    result = asyncio.run(graph.run("What is total revenue?"))
+
+    assert result.status == "blocked"
+    assert result.policy_code == "non_select_statement"
+    assert len(llm.calls) == 2
+    assert query_tool.calls == []
+    assert result.trace is not None
+    assert _step_status(result, "sql_repair_generation") == "ok"
+
+
+def test_ask_data_graph_does_not_repair_blocked_sql() -> None:
+    llm = QueueLLM(["DROP TABLE orders"])
+    query_tool = StubQueryTool()
+    graph = AskDataGraph(llm_resolver=lambda: llm, query_tool=query_tool)  # type: ignore[arg-type]
+
+    result = asyncio.run(graph.run("What is total revenue?"))
+
+    assert result.status == "blocked"
+    assert len(llm.calls) == 1
+    assert query_tool.calls == []
+    assert result.trace is not None
+    assert _step_status(result, "sql_repair_eligibility") == "skipped"
+    assert not [step for step in result.trace.steps if step.name == "sql_repair_generation"]
+
+
+def test_ask_data_graph_repairs_execution_failure_once() -> None:
+    llm = QueueLLM(
+        [
+            "SELECT COUNT(*) AS order_count FROM orders",
+            "SELECT COUNT(*) AS order_count FROM orders",
+        ]
+    )
+    query_tool = FailsThenSucceedsQueryTool()
+    graph = AskDataGraph(llm_resolver=lambda: llm, query_tool=query_tool)  # type: ignore[arg-type]
+
+    result = asyncio.run(graph.run("How many orders?"))
+
+    assert result.status == "ok"
+    assert len(llm.calls) == 2
+    assert len(query_tool.calls) == 2
+    assert result.trace is not None
+    assert _step_status(result, "sql_repair_generation") == "ok"
+
+
+def test_ask_data_graph_stops_after_one_repair_attempt() -> None:
+    llm = QueueLLM(
+        [
+            "SELECT bad_column FROM orders",
+            "SELECT another_bad_column FROM orders",
+            "SELECT COUNT(*) AS order_count FROM orders",
+        ]
+    )
+    query_tool = StubQueryTool()
+    graph = AskDataGraph(llm_resolver=lambda: llm, query_tool=query_tool)  # type: ignore[arg-type]
+
+    result = asyncio.run(graph.run("What is total revenue?"))
+
+    assert result.status == "unsupported"
+    assert result.policy_code == "unknown_column"
+    assert len(llm.calls) == 2
+    assert query_tool.calls == []
+    assert result.trace is not None
+    assert [
+        step.status for step in result.trace.steps if step.name == "sql_repair_eligibility"
+    ] == ["ok", "skipped"]
+    final_step = [step for step in result.trace.steps if step.name == "final_result"][-1]
+    assert final_step.metadata["policy_code"] == "unknown_column"
 
 
 def test_ask_data_graph_database_error_skips_answer_rendering() -> None:
@@ -406,6 +541,20 @@ def test_ask_data_graph_database_error_skips_answer_rendering() -> None:
     assert result.trace is not None
     assert _step_status(result, "query_execution") == "error"
     assert _step_status(result, "answer_rendering") == "skipped"
+
+
+def test_ask_data_graph_nonrepairable_execution_failure_skips_repair() -> None:
+    llm = StubLLM("SELECT COUNT(*) AS order_count FROM orders")
+    query_tool = FailingQueryTool(psycopg.OperationalError("database unavailable"))
+    graph = AskDataGraph(llm_resolver=lambda: llm, query_tool=query_tool)  # type: ignore[arg-type]
+
+    result = asyncio.run(graph.run("How many orders?"))
+
+    assert result.status == "error"
+    assert result.policy_code == "database_execution_error"
+    assert result.trace is not None
+    assert _step_status(result, "sql_repair_eligibility") == "skipped"
+    assert not [step for step in result.trace.steps if step.name == "sql_repair_generation"]
 
 
 @pytest.mark.parametrize(

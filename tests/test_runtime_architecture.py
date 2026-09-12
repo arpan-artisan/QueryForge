@@ -2,7 +2,7 @@ import asyncio
 
 from queryforge.approval import approve_sql_candidate
 from queryforge.context import build_query_context
-from queryforge.generation import generate_sql_candidate
+from queryforge.generation import generate_repaired_sql_candidate, generate_sql_candidate
 from queryforge.models import AgentRequest, ApprovedQuery, QueryResult, SQLCandidate
 from queryforge.runtime import AskDataRuntime
 from queryforge.schema import SCHEMA_CONTEXT
@@ -54,6 +54,32 @@ def test_sql_generator_wraps_provider_output_as_candidate() -> None:
         attempt=1,
     )
     assert llm.calls == [("Show orders", "orders(id integer)")]
+
+
+def test_repair_generator_reuses_provider_contract_with_repair_prompt() -> None:
+    llm = StubLLM("SELECT COUNT(*) AS order_count FROM orders")
+    request = AgentRequest(question="Count orders")
+    context = build_query_context(request, "orders(id integer)")
+
+    candidate = asyncio.run(
+        generate_repaired_sql_candidate(
+            llm,
+            request,
+            context,
+            failed_sql="SELECT bad_column FROM orders",
+            failure_source="sql_validation",
+            failure_reason="unknown column",
+        )
+    )
+
+    prompt, schema = llm.calls[0]
+    assert candidate.attempt == 2
+    assert candidate.sql == "SELECT COUNT(*) AS order_count FROM orders"
+    assert schema == "orders(id integer)"
+    assert "Original question:\nCount orders" in prompt
+    assert "Failed SQL:\nSELECT bad_column FROM orders" in prompt
+    assert "Failure source:\nsql_validation" in prompt
+    assert "Failure reason:\nunknown column" in prompt
 
 
 def test_validator_approver_only_approves_allowed_candidates() -> None:

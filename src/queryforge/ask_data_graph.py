@@ -11,7 +11,7 @@ from langgraph.graph import END, START, StateGraph
 from queryforge.answers import render_rows_as_answer
 from queryforge.approval import approve_sql_candidate
 from queryforge.context import build_query_context
-from queryforge.generation import generate_sql_candidate
+from queryforge.generation import generate_repaired_sql_candidate, generate_sql_candidate
 from queryforge.intent_policy import evaluate_intent_policy
 from queryforge.llm import (
     LLMNotConfiguredError,
@@ -42,6 +42,11 @@ from queryforge.observability import (
     build_bounded_row_preview,
 )
 from queryforge.postgres import DemoDatabaseNotReadyError
+from queryforge.repair import (
+    execution_failure_is_repairable,
+    repair_reason,
+    validation_failure_is_repairable,
+)
 from queryforge.sql_safety import SQLSafetyError
 from queryforge.tools import QueryExecutorTool
 
@@ -78,6 +83,7 @@ class AskDataGraphState(TypedDict, total=False):
     provider: str
     model: str
     candidate: SQLCandidate
+    attempts: list[SQLCandidate]
     sql_decision: SQLPolicyDecision
     approved_query: ApprovedQuery
     answer: str
@@ -89,6 +95,10 @@ class AskDataGraphState(TypedDict, total=False):
     skip_steps: list[str]
     skip_reason: str
     query_result: QueryResult
+    repair_used: bool
+    repair_failure_source: str
+    repair_failure_reason: str
+    repair_failed_sql: str
     result: AskDataResult
 
 
@@ -132,6 +142,8 @@ class AskDataGraph:
             "validation_status": None,
             "policy_code": None,
             "policy_reason": None,
+            "attempts": [],
+            "repair_used": False,
         }
         final_state = await self._graph.ainvoke(state)
         return final_state["result"]
@@ -275,7 +287,7 @@ class AskDataGraph:
             started_at=started_at,
             duration_ms=_elapsed_ms(started_perf),
         )
-        return {"candidate": candidate, "sql": candidate.sql}
+        return {"candidate": candidate, "attempts": [candidate], "sql": candidate.sql}
 
     async def validate_sql(self, state: AskDataGraphState) -> dict[str, Any]:
         started_at, started_perf = _start_timer()
@@ -290,15 +302,33 @@ class AskDataGraph:
         }
 
         if decision.status != "allowed":
-            updates.update(
-                _terminal_update(
-                    status=decision.status,
-                    answer=_sql_policy_failure_answer(decision),
-                    failed_stage="sql_validation",
-                    skip_reason=f"sql_policy_{decision.status}",
-                    sql=decision.original_sql,
-                )
+            repair_allowed = (
+                not state.get("repair_used", False) and validation_failure_is_repairable(decision)
             )
+            self._record_repair_eligibility(
+                state,
+                allowed=repair_allowed,
+                source="sql_validation",
+                reason=decision.reason,
+            )
+            if repair_allowed:
+                updates.update(
+                    {
+                        "repair_failure_source": "sql_validation",
+                        "repair_failure_reason": repair_reason("sql_validation", decision.reason),
+                        "repair_failed_sql": decision.original_sql,
+                    }
+                )
+            else:
+                updates.update(
+                    _terminal_update(
+                        status=decision.status,
+                        answer=_sql_policy_failure_answer(decision),
+                        failed_stage="sql_validation",
+                        skip_reason=_repair_skip_reason(state, decision.code),
+                        sql=decision.original_sql,
+                    )
+                )
         else:
             updates["approved_query"] = approved_query
 
@@ -326,6 +356,81 @@ class AskDataGraph:
                 },
             )
         return updates
+
+    async def repair_sql(self, state: AskDataGraphState) -> dict[str, Any]:
+        started_at, started_perf = _start_timer()
+        llm = state["llm"]
+        try:
+            candidate = await generate_repaired_sql_candidate(
+                llm,
+                state["request"],
+                state["context"],
+                failed_sql=state["repair_failed_sql"],
+                failure_source=state["repair_failure_source"],
+                failure_reason=state["repair_failure_reason"],
+            )
+        except LLMUnsupportedQuestionError as exc:
+            state["recorder"].record_step(
+                "sql_repair_generation",
+                "unsupported",
+                metadata=_repair_metadata(state, "provider_unsupported"),
+                error=str(exc),
+                started_at=started_at,
+                duration_ms=_elapsed_ms(started_perf),
+            )
+            return _terminal_update(
+                status="unsupported",
+                answer=f"Unsupported question after repair attempt: {exc}",
+                failed_stage=state["repair_failure_source"],
+                skip_reason="repair_provider_unsupported",
+                sql=state["repair_failed_sql"],
+            ) | {
+                "repair_used": True,
+                "validation_status": "unsupported",
+                "policy_code": "provider_unsupported",
+                "policy_reason": str(exc),
+            }
+        except LLMProviderError as exc:
+            state["recorder"].record_step(
+                "sql_repair_generation",
+                "error",
+                metadata=_repair_metadata(state, "llm_provider_error"),
+                error=str(exc),
+                started_at=started_at,
+                duration_ms=_elapsed_ms(started_perf),
+            )
+            return _terminal_update(
+                status="error",
+                answer=f"LLM repair failed: {exc}",
+                failed_stage=state["repair_failure_source"],
+                skip_reason="repair_provider_error",
+                sql=state["repair_failed_sql"],
+            ) | {
+                "repair_used": True,
+                "policy_code": "llm_provider_error",
+                "policy_reason": str(exc),
+            }
+
+        attempts = [*state.get("attempts", []), candidate]
+        state["recorder"].record_step(
+            "sql_repair_generation",
+            "ok",
+            metadata=_repair_metadata(state, "repair_generated")
+            | {
+                "provider": llm.provider_name,
+                "model": llm.model_name,
+                "generated_sql": candidate.sql,
+                "attempt": candidate.attempt,
+            },
+            started_at=started_at,
+            duration_ms=_elapsed_ms(started_perf),
+        )
+        return {
+            "candidate": candidate,
+            "attempts": attempts,
+            "repair_used": True,
+            "sql": candidate.sql,
+        }
 
     async def execute_query(self, state: AskDataGraphState) -> dict[str, Any]:
         started_at, started_perf = _start_timer()
@@ -384,6 +489,9 @@ class AskDataGraph:
             }
         except psycopg.Error as exc:
             sql = state["approved_query"].sql
+            repair_allowed = (
+                not state.get("repair_used", False) and execution_failure_is_repairable(exc)
+            )
             state["recorder"].record_step(
                 "query_execution",
                 "error",
@@ -396,6 +504,20 @@ class AskDataGraph:
                 started_at=started_at,
                 duration_ms=_elapsed_ms(started_perf),
             )
+            self._record_repair_eligibility(
+                state,
+                allowed=repair_allowed,
+                source="query_execution",
+                reason=str(exc),
+            )
+            if repair_allowed:
+                return {
+                    "repair_failure_source": "query_execution",
+                    "repair_failure_reason": repair_reason("query_execution", str(exc)),
+                    "repair_failed_sql": sql,
+                    "policy_code": "database_execution_error",
+                    "policy_reason": str(exc),
+                }
             return {
                 "status": "error",
                 "answer": f"Query execution failed: {exc}",
@@ -421,6 +543,26 @@ class AskDataGraph:
             duration_ms=_elapsed_ms(started_perf),
         )
         return {"query_result": query_result, "sql": query_result.sql}
+
+    def _record_repair_eligibility(
+        self,
+        state: AskDataGraphState,
+        *,
+        allowed: bool,
+        source: str,
+        reason: str,
+    ) -> None:
+        state["recorder"].record_step(
+            "sql_repair_eligibility",
+            "ok" if allowed else "skipped",
+            metadata={
+                "repair_allowed": allowed,
+                "repair_used": state.get("repair_used", False),
+                "failure_source": source,
+                "failure_reason": reason,
+                "skip_reason": None if allowed else "repair_not_allowed",
+            },
+        )
 
     async def render_answer(self, state: AskDataGraphState) -> dict[str, Any]:
         started_at, started_perf = _start_timer()
@@ -487,6 +629,7 @@ def build_ask_data_graph(nodes: AskDataGraph):
     graph.add_node("provider_resolution", nodes.resolve_provider)
     graph.add_node("llm_sql_generation", nodes.generate_sql)
     graph.add_node("sql_validation", nodes.validate_sql)
+    graph.add_node("sql_repair_generation", nodes.repair_sql)
     graph.add_node("query_execution", nodes.execute_query)
     graph.add_node("answer_rendering", nodes.render_answer)
     graph.add_node("record_skipped_downstream", nodes.record_skipped_downstream)
@@ -512,12 +655,25 @@ def build_ask_data_graph(nodes: AskDataGraph):
     graph.add_conditional_edges(
         "sql_validation",
         _route_after_validation,
-        {"ready": "query_execution", "terminal": "record_skipped_downstream"},
+        {
+            "ready": "query_execution",
+            "repair": "sql_repair_generation",
+            "terminal": "record_skipped_downstream",
+        },
+    )
+    graph.add_conditional_edges(
+        "sql_repair_generation",
+        _route_after_repair_generation,
+        {"ready": "sql_validation", "terminal": "record_skipped_downstream"},
     )
     graph.add_conditional_edges(
         "query_execution",
         _route_after_execution,
-        {"ready": "answer_rendering", "terminal": "record_skipped_downstream"},
+        {
+            "ready": "answer_rendering",
+            "repair": "sql_repair_generation",
+            "terminal": "record_skipped_downstream",
+        },
     )
     graph.add_edge("answer_rendering", "final_result")
     graph.add_edge("record_skipped_downstream", "final_result")
@@ -564,11 +720,19 @@ def _route_after_generation(state: AskDataGraphState) -> str:
 
 def _route_after_validation(state: AskDataGraphState) -> str:
     decision = state["sql_decision"]
-    return "ready" if decision.status == "allowed" and "approved_query" in state else "terminal"
+    if decision.status == "allowed" and "approved_query" in state:
+        return "ready"
+    return "repair" if "repair_failure_source" in state and "status" not in state else "terminal"
+
+
+def _route_after_repair_generation(state: AskDataGraphState) -> str:
+    return "ready" if state.get("candidate") and "status" not in state else "terminal"
 
 
 def _route_after_execution(state: AskDataGraphState) -> str:
-    return "ready" if "query_result" in state else "terminal"
+    if "query_result" in state:
+        return "ready"
+    return "repair" if "repair_failure_source" in state and "status" not in state else "terminal"
 
 
 def _agent_result_from_state(state: AskDataGraphState, trace: RunTrace) -> AskDataResult:
@@ -628,3 +792,17 @@ def _sql_policy_failure_answer(decision: SQLPolicyDecision) -> str:
         "invalid": "Invalid SQL",
     }[decision.status]
     return f"{answer_prefix}: {decision.reason}"
+
+
+def _repair_skip_reason(state: AskDataGraphState, code: str) -> str:
+    return "repair_limit_exhausted" if state.get("repair_used", False) else f"sql_policy_{code}"
+
+
+def _repair_metadata(state: AskDataGraphState, category: str) -> dict[str, Any]:
+    return {
+        "repair_category": category,
+        "repair_reason": state.get("repair_failure_reason"),
+        "failure_source": state.get("repair_failure_source"),
+        "failed_sql": state.get("repair_failed_sql"),
+        "attempt": 2,
+    }

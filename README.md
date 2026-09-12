@@ -12,7 +12,7 @@ Both tools should eventually share the same foundation for LLM providers, databa
 Current scope is intentionally smaller: a local Ask Data NL2SQL CLI backed by Postgres.
 
 ```text
-question -> AskDataRuntime -> LangGraph AskDataGraph -> intent policy -> context builder -> LLM provider -> SQLCandidate -> SQL approval -> ApprovedQuery -> read-only Postgres executor -> trace + result JSON
+question -> AskDataRuntime -> LangGraph AskDataGraph -> intent policy -> context builder -> LLM provider -> SQLCandidate -> SQL approval -> optional one-shot repair -> ApprovedQuery -> read-only Postgres executor -> trace + result JSON
 ```
 
 There is no frontend, public API, dashboard generation, persistent memory, multi-database support, or governance system yet.
@@ -85,7 +85,7 @@ Stable expected facts for future eval authors are documented in
 
 ## Ask Data Observability
 
-Ask Data now enters through `AskDataRuntime`, the public single-turn runtime used by the CLI and eval harness. Internally it delegates orchestration to `AskDataGraph`, a small LangGraph workflow with explicit stages for intent policy, context building, provider resolution, LLM SQL generation, SQL validation, approval, query execution, answer rendering, and final result assembly.
+Ask Data now enters through `AskDataRuntime`, the public single-turn runtime used by the CLI and eval harness. Internally it delegates orchestration to `AskDataGraph`, a small LangGraph workflow with explicit stages for intent policy, context building, provider resolution, LLM SQL generation, SQL validation, one optional SQL repair attempt, approval, query execution, answer rendering, and final result assembly.
 
 Every `queryforge ask` response includes:
 
@@ -151,6 +151,7 @@ The current SQL policy is allow-list based and still applies after allowed inten
 - Comments, stacked statements, mutating operations, data-modifying CTEs, `SELECT INTO`, locking clauses, system schemas, system tables, unapproved functions, and `SELECT *` are blocked.
 - Row-returning queries get a default `LIMIT 100`; larger static limits are capped at `100`.
 - Scalar aggregate queries such as `COUNT` or `SUM` are not force-limited because that would change the answer.
+- For allowed analytics, QueryForge may request one repaired SQL candidate after a repairable validation or execution failure. Repaired SQL must pass the same SQL policy and `ApprovedQuery` boundary before execution. Unsafe intent, blocked SQL, mutation, multiple statements, prohibited functions, system metadata access, readiness failures, and executor revalidation failures are not repairable.
 - The executor accepts only `ApprovedQuery`, revalidates SQL, checks demo database readiness, opens the read-only connection, and sets `statement_timeout` before running the validated SQL.
 
 CLI result statuses:
@@ -193,10 +194,10 @@ uv run queryforge evals run --mode reference --split all
 Postgres must already be running and initialized. Evals never reset it. Reports
 are written to ignored `evaluation-results/<run-id>/report.json` and `report.md`.
 They contain actual answers, rows, generated SQL, local traces, per-dimension
-grades, failure categories, and reproducibility metadata. Reference scores test
-the harness; only live scores measure model capability. Live runs use provider
-quota. Exit codes: `0` all selected trials pass, `1` graded failures, `2` invalid
-setup/environment or report failure.
+grades, repair-attempt evidence, failure categories, and reproducibility metadata.
+Reference scores test the harness; only live scores measure model capability. Live
+runs use provider quota. Exit codes: `0` all selected trials pass, `1` graded
+failures, `2` invalid setup/environment or report failure.
 
 See `docs/evaluations.md` for task authoring, grading rules, limitations, and
 the manual review process derived from the supplied Anthropic guidance.

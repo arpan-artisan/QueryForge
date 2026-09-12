@@ -2,7 +2,7 @@
 
 This is the living diagram page for QueryForge. Update it whenever an OpenSpec change alters the user flow, module boundaries, core classes, result models, statuses, setup steps, or execution path.
 
-Current scope: local CLI Ask Data flow for a stabilized seven-table Postgres demo database with LangGraph orchestration, bounded local traces, optional Langfuse export, execution-time demo database readiness checks, and reference/live evaluation commands.
+Current scope: local CLI Ask Data flow for a stabilized seven-table Postgres demo database with LangGraph orchestration, one bounded SQL repair attempt, bounded local traces, optional Langfuse export, execution-time demo database readiness checks, and reference/live evaluation commands.
 
 ## Demo Schema
 
@@ -150,9 +150,16 @@ flowchart TD
     policy --> cast_policy["AST safety: approved cast targets and bounded modifiers; nested operands still checked"]
     cast_policy --> sql_decision{"SQLPolicyDecision.status"}
 
-    sql_decision -- blocked --> skip_sql["Record SQL policy failure and skipped approval/query execution"]
-    sql_decision -- unsupported --> skip_sql
-    sql_decision -- invalid --> skip_sql
+    sql_decision -- blocked --> repair_check["Record sql_repair_eligibility"]
+    sql_decision -- unsupported --> repair_check
+    sql_decision -- invalid --> repair_check
+    repair_check -- non-repairable or repair used --> skip_sql["Record SQL policy failure and skipped approval/query execution"]
+    repair_check -- repairable and unused --> repair_generation["sql_repair_generation node"]
+    repair_generation --> repair_generator["generate_repaired_sql_candidate(llm, request, context, failed SQL, failure source, failure reason)"]
+    repair_generator --> repair_call["llm.generate_sql(repair prompt, context.schema_text)"]
+    repair_call --> repair_candidate["SQLCandidate(sql, provider, model, attempt=2)"]
+    repair_candidate --> validation_node
+    repair_call -. provider unsupported or error .-> skip_sql
     sql_decision -- allowed --> approval_step["Record query_approval and create ApprovedQuery"]
     approval_step --> approved_query["ApprovedQuery(normalized_sql, policy decision)"]
     approved_query --> execution_node["query_execution node"]
@@ -168,7 +175,8 @@ flowchart TD
 
     revalidate -. policy mismatch .-> skip_execution["Record execution validation error and skipped answer rendering"]
     readiness_check -. missing, stale, drifted, or unreachable DB .-> skip_execution
-    sql_execute -. timeout or database error .-> skip_execution
+    sql_execute -. non-repairable timeout, readiness, or database error .-> skip_execution
+    sql_execute -. repairable SQL-shape database error and repair unused .-> repair_generation
 
     rows --> render_node["answer_rendering node"]
     render_node --> render["render_rows_as_answer(question, rows)"]
@@ -207,6 +215,7 @@ classDiagram
         +resolve_provider(state) dict
         +generate_sql(state) dict
         +validate_sql(state) dict
+        +repair_sql(state) dict
         +execute_query(state) dict
         +render_answer(state) dict
         +finalize_result(state) AskDataResult
@@ -222,8 +231,13 @@ classDiagram
         +QueryContext? context
         +LLMProvider? llm
         +SQLCandidate? candidate
+        +list attempts
         +ApprovedQuery? approved_query
         +QueryResult? query_result
+        +bool repair_used
+        +str? repair_failure_source
+        +str? repair_failure_reason
+        +str? repair_failed_sql
         +IntentPolicyDecision? intent_decision
         +SQLPolicyDecision? sql_decision
         +AskDataResult? result
@@ -247,6 +261,12 @@ classDiagram
 
     class GenerationFunctions {
         +generate_sql_candidate(llm, request, context) SQLCandidate
+        +generate_repaired_sql_candidate(llm, request, context, failed_sql, failure_source, failure_reason) SQLCandidate
+    }
+
+    class RepairFunctions {
+        +validation_failure_is_repairable(decision) bool
+        +execution_failure_is_repairable(error) bool
     }
 
     class SQLCandidate {
@@ -440,6 +460,7 @@ classDiagram
     GenerationFunctions --> LLMProvider
     GenerationFunctions --> SQLCandidate
     AskDataGraph --> ApprovalFunctions
+    AskDataGraph --> RepairFunctions
     ApprovalFunctions --> SQLCandidate
     ApprovalFunctions --> SQLPolicyDecision
     ApprovalFunctions --> ApprovedQuery
@@ -531,12 +552,15 @@ flowchart TD
     request --> runtime["AskDataRuntime.run using normal workflow"]
     runtime --> intent_check{"Normal intent policy"}
     intent_check -- allowed --> mode{"Provider mode"}
-    mode -- reference --> scripted["ReferenceProvider returns reference SQL"]
+    mode -- reference --> scripted["ReferenceProvider returns reference SQL or scripted initial/repair SQL"]
     mode -- live --> configured["create_llm_provider uses local configuration"]
     scripted --> policy["Existing SQL approval and read-only execution policies"]
     configured --> policy
     intent_check -- local rejection --> result["AskDataResult and local trace"]
-    policy --> result
+    policy --> repair_eval{"Repair needed?"}
+    repair_eval -- yes --> repair_path["Normal workflow records repair eligibility and repair generation"]
+    repair_path --> policy
+    repair_eval -- no --> result
     result --> grades["grade_result: status, safety, results, diagnostics"]
     grades --> unchanged["Check content digest after trial"]
     unchanged --> repeat{"More cases or trials?"}
@@ -566,6 +590,9 @@ classDiagram
         +str question
         +str expected_status
         +str reference_sql
+        +str initial_sql
+        +str repair_sql
+        +int expected_repair_attempts
         +list expected_rows
         +bool ordered
         +float tolerance
@@ -575,6 +602,7 @@ classDiagram
         +str reason
     }
     class ReferenceProvider {
+        +list outputs
         +generate_sql(question, schema_context) str
     }
     class RecordingProvider {

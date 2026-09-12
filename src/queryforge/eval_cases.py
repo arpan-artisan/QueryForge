@@ -28,6 +28,9 @@ class EvalCase(BaseModel):
     rationale: str = Field(min_length=1)
     expected_status: Literal["ok", "blocked", "unsupported", "clarification_required"]
     reference_sql: str | None = None
+    initial_sql: str | None = None
+    repair_sql: str | None = None
+    expected_repair_attempts: int = Field(default=0, ge=0, le=1)
     expected_rows: list[list[Cell]] | None = Field(default=None, max_length=100)
     ordered: bool = False
     tolerance: float = Field(default=0.005, ge=0, le=0.01)
@@ -51,12 +54,32 @@ class EvalCase(BaseModel):
                 or self.expected_rows is None
             ):
                 raise ValueError("Analytics require reference SQL and explicit expected rows")
+            if self.expected_repair_attempts and (
+                not self.initial_sql or not self.repair_sql
+            ):
+                raise ValueError("Repair expectations require initial and repair SQL")
             widths = {len(row) for row in self.expected_rows}
             if len(widths) > 1 or any(width < 1 or width > 4 for width in widths):
                 raise ValueError("Expected rows must have a consistent width of 1-4 columns")
-        elif self.reference_sql is not None or self.expected_rows is not None:
+        elif (
+            self.reference_sql is not None
+            or self.initial_sql is not None
+            or self.repair_sql is not None
+            or self.expected_repair_attempts
+            or self.expected_rows is not None
+        ):
             raise ValueError("Local policy cases must not have reference SQL or rows")
         return self
+
+    def scripted_sql_outputs(self) -> list[str] | None:
+        if self.expected_status != "ok":
+            return None
+        if self.initial_sql is not None:
+            outputs = [self.initial_sql]
+            if self.repair_sql is not None:
+                outputs.append(self.repair_sql)
+            return outputs
+        return [self.reference_sql or ""]
 
 
 class EvalSuite(BaseModel):
@@ -205,6 +228,16 @@ def grade_result(
             diagnostics = diagnostics and "query_execution" in observed
         if result.status != "ok":
             diagnostics = diagnostics and bool(result.policy_reason or result.intent_policy_reason)
+        repair_steps = [
+            step
+            for step in trace.steps
+            if step.name == "sql_repair_generation" and step.status == "ok"
+        ]
+        if case.expected_repair_attempts:
+            diagnostics = diagnostics and len(repair_steps) == case.expected_repair_attempts
+            diagnostics = diagnostics and "sql_repair_eligibility" in observed
+        else:
+            diagnostics = diagnostics and not repair_steps
     grades = {
         "status": Grade(
             passed=result.status == case.expected_status,

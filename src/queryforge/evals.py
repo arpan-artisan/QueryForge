@@ -43,13 +43,16 @@ class ReferenceProvider:
     provider_name = "reference"
     model_name = "scripted-sql-not-an-llm"
 
-    def __init__(self, reference_sql: str | None) -> None:
-        self.sql = reference_sql
+    def __init__(self, reference_sql: str | None, outputs: list[str] | None = None) -> None:
+        self.outputs = list(outputs) if outputs is not None else ([] if reference_sql is None else [reference_sql])
+        self.last_output = self.outputs[-1] if self.outputs else None
 
     async def generate_sql(self, question: str, schema_context: str) -> str:
-        if self.sql is None:
+        if self.outputs:
+            return self.outputs.pop(0)
+        if self.last_output is None:
             raise AssertionError("A local policy case unexpectedly requested SQL")
-        return self.sql
+        return self.last_output
 
 
 class RecordingProvider:
@@ -198,6 +201,8 @@ async def run_trial(
         "trial": trial_number,
         "question": case.question,
         "expected_status": case.expected_status,
+        "expected_repair_attempts": case.expected_repair_attempts,
+        "repair_attempts": _repair_attempt_count(result) if result else 0,
         "expected_rows": case.expected_rows,
         "ordered": case.ordered,
         "tolerance": case.tolerance,
@@ -359,7 +364,10 @@ async def run_evaluations(
                 factory = (
                     create_llm_provider
                     if mode == "live"
-                    else lambda case=case: ReferenceProvider(case.reference_sql)
+                    else lambda case=case: ReferenceProvider(
+                        case.reference_sql,
+                        outputs=case.scripted_sql_outputs(),
+                    )
                 )
                 report["trials"].append(
                     await run_trial(case, number, factory, QueryExecutorTool(url))
@@ -431,3 +439,13 @@ def write_report(report: dict, output_dir: Path) -> Path:
     ]
     (directory / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path
+
+
+def _repair_attempt_count(result) -> int:
+    if result is None or result.trace is None:
+        return 0
+    return sum(
+        1
+        for step in result.trace.steps
+        if step.name == "sql_repair_generation" and step.status == "ok"
+    )

@@ -84,6 +84,19 @@ def test_invalid_case_contracts(update):
         EvalCase.model_validate(case_for([[7]]).model_dump() | update)
 
 
+@pytest.mark.parametrize(
+    "update",
+    [
+        {"initial_sql": "SELECT bad_column FROM orders", "expected_repair_attempts": 1},
+        {"repair_sql": "SELECT COUNT(*) FROM orders", "expected_repair_attempts": 1},
+        {"expected_repair_attempts": 2},
+    ],
+)
+def test_invalid_repair_case_contracts(update):
+    with pytest.raises(ValidationError):
+        EvalCase.model_validate(case_for([[7]]).model_dump() | update)
+
+
 def test_duplicate_ids_and_invalid_selection():
     suite, _ = load_suite()
     with pytest.raises(ValidationError):
@@ -152,6 +165,115 @@ def test_normal_graph_and_alias_independent_grading():
     assert not grade_result(
         case, result, model_calls=1, executor_calls=1, executed_sql=["DROP TABLE orders"]
     )["safety"].passed
+
+
+def test_repair_case_requires_trace_evidence() -> None:
+    case = case_for(
+        [[7]],
+        initial_sql="SELECT bad_column FROM orders",
+        repair_sql="SELECT COUNT(*) FROM orders",
+        expected_repair_attempts=1,
+    )
+    trial = asyncio.run(
+        evals.run_trial(
+            case,
+            1,
+            lambda: evals.ReferenceProvider(
+                case.reference_sql,
+                outputs=case.scripted_sql_outputs(),
+            ),
+            FakeExecutor(),
+        )
+    )
+
+    assert trial["passed"]
+    assert trial["model_calls"] == 2
+    assert trial["executor_calls"] == 1
+    assert trial["candidate_sql"] == [
+        "SELECT bad_column FROM orders",
+        "SELECT COUNT(*) FROM orders",
+    ]
+    assert trial["repair_attempts"] == 1
+
+    result = AskDataResult.model_validate(trial["result"])
+    result.trace.steps = [
+        step for step in result.trace.steps if step.name != "sql_repair_generation"
+    ]
+    assert not grade_result(
+        case,
+        result,
+        model_calls=2,
+        executor_calls=1,
+        executed_sql=trial["executed_sql"],
+    )["diagnostics"].passed
+
+
+def test_repair_failure_does_not_pass_on_partial_credit() -> None:
+    case = case_for(
+        [[7]],
+        initial_sql="SELECT bad_column FROM orders",
+        repair_sql="SELECT another_bad_column FROM orders",
+        expected_repair_attempts=1,
+    )
+    trial = asyncio.run(
+        evals.run_trial(
+            case,
+            1,
+            lambda: evals.ReferenceProvider(
+                case.reference_sql,
+                outputs=case.scripted_sql_outputs(),
+            ),
+            FakeExecutor(),
+        )
+    )
+
+    assert not trial["passed"]
+    assert trial["repair_attempts"] == 1
+    assert trial["model_calls"] == 2
+    assert trial["executor_calls"] == 0
+    assert not trial["grades"]["result"]["passed"]
+    assert trial["partial_credit"] < 1
+
+
+def test_unsafe_generated_sql_is_not_repaired_in_evals() -> None:
+    case = case_for([[7]])
+    trial = asyncio.run(
+        evals.run_trial(
+            case,
+            1,
+            lambda: evals.ReferenceProvider(case.reference_sql, outputs=["DROP TABLE orders"]),
+            FakeExecutor(),
+        )
+    )
+
+    assert not trial["passed"]
+    assert trial["model_calls"] == 1
+    assert trial["executor_calls"] == 0
+    assert trial["repair_attempts"] == 0
+    assert trial["grades"]["safety"]["passed"]
+
+
+def test_retry_limit_is_visible_in_evals() -> None:
+    case = case_for(
+        [[7]],
+        initial_sql="SELECT bad_column FROM orders",
+        repair_sql="SELECT another_bad_column FROM orders",
+        expected_repair_attempts=1,
+    )
+    provider = evals.ReferenceProvider(
+        case.reference_sql,
+        outputs=[
+            "SELECT bad_column FROM orders",
+            "SELECT another_bad_column FROM orders",
+            "SELECT COUNT(*) FROM orders",
+        ],
+    )
+
+    trial = asyncio.run(evals.run_trial(case, 1, lambda: provider, FakeExecutor()))
+
+    assert not trial["passed"]
+    assert trial["model_calls"] == 2
+    assert trial["repair_attempts"] == 1
 
 
 @pytest.mark.parametrize(
