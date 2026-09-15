@@ -3,6 +3,7 @@ import asyncio
 from queryforge.approval import approve_sql_candidate
 from queryforge.context import build_query_context
 from queryforge.generation import generate_repaired_sql_candidate, generate_sql_candidate
+from queryforge.memory import ConversationTurn, MemoryContext
 from queryforge.models import AgentRequest, ApprovedQuery, QueryResult, SQLCandidate
 from queryforge.runtime import AskDataRuntime
 from queryforge.schema import SCHEMA_CONTEXT
@@ -38,6 +39,31 @@ def test_context_builder_returns_static_schema_contract() -> None:
 
     assert context.schema_text == SCHEMA_CONTEXT
     assert context.examples == []
+
+
+def test_context_builder_can_include_bounded_memory_context() -> None:
+    request = AgentRequest(question="Break that down", source="eval", session_id="s")
+    memory = MemoryContext(
+        session_id="s",
+        recent_turns=[
+            ConversationTurn(
+                question="Show revenue",
+                status="ok",
+                sql="SELECT SUM(amount) FROM payments",
+                columns=["sum"],
+                row_count=1,
+                preview_rows=[{"sum": 10}],
+                answer="Sum is 10.",
+                trace_id="qf_prior",
+            )
+        ],
+    )
+
+    context = build_query_context(request, memory, "payments(amount numeric)")
+
+    assert "payments(amount numeric)" in context.schema_text
+    assert "Previous same-session Ask Data context" in context.schema_text
+    assert "Show revenue" in context.schema_text
 
 
 def test_sql_generator_wraps_provider_output_as_candidate() -> None:
@@ -98,7 +124,7 @@ def test_validator_approver_only_approves_allowed_candidates() -> None:
     assert blocked.status == "blocked"
 
 
-def test_ask_data_runtime_is_public_single_turn_entrypoint() -> None:
+def test_ask_data_runtime_is_public_runtime_entrypoint_with_default_memory_boundary() -> None:
     llm = StubLLM()
     executor = StubExecutor()
     runtime = AskDataRuntime(llm_resolver=lambda: llm, query_tool=executor)  # type: ignore[arg-type]
@@ -113,4 +139,9 @@ def test_ask_data_runtime_is_public_single_turn_entrypoint() -> None:
     assert result.provider == "stub"
     assert result.model == "runtime-test"
     assert result.rows == [{"order_count": 7}]
+    assert result.trace is not None
+    assert [step.name for step in result.trace.steps if step.name.startswith("memory_")] == [
+        "memory_read",
+        "memory_write",
+    ]
     assert executor.calls and isinstance(executor.calls[0], ApprovedQuery)

@@ -10,12 +10,15 @@ The long-term product direction has two tools:
 Both tools should eventually share the same foundation for LLM providers, database access, schema context, SQL validation, query execution, traces, evals, memory, adapters, and governance.
 
 Current scope is intentionally smaller: a local Ask Data NL2SQL CLI backed by Postgres.
+Memory is now part of the Ask Data workflow boundary, but the first
+implementation is process-local session memory only.
 
 ```text
-question -> AskDataRuntime -> LangGraph AskDataGraph -> intent policy -> context builder -> LLM provider -> SQLCandidate -> SQL approval -> optional one-shot repair -> ApprovedQuery -> read-only Postgres executor -> trace + result JSON
+question -> AskDataRuntime -> LangGraph AskDataGraph -> memory read -> intent policy -> context builder -> LLM provider -> SQLCandidate -> SQL approval -> optional one-shot repair -> ApprovedQuery -> read-only Postgres executor -> answer -> memory write -> trace + result JSON
 ```
 
-There is no frontend, public API, dashboard generation, persistent memory, multi-database support, or governance system yet.
+There is no frontend, public API, dashboard generation, persistent memory,
+embeddings, vector retrieval, multi-database support, or governance system yet.
 
 ## Local Setup
 
@@ -26,6 +29,7 @@ docker compose up -d postgres
 uv run queryforge init-db
 uv run queryforge check-db
 uv run queryforge ask "What is total revenue?"
+uv run queryforge chat --session local-demo
 ```
 
 Set your Groq key in `.env` before running `ask`:
@@ -85,16 +89,46 @@ Stable expected facts for future eval authors are documented in
 
 ## Ask Data Observability
 
-Ask Data now enters through `AskDataRuntime`, the public single-turn runtime used by the CLI and eval harness. Internally it delegates orchestration to `AskDataGraph`, a small LangGraph workflow with explicit stages for intent policy, context building, provider resolution, LLM SQL generation, SQL validation, one optional SQL repair attempt, approval, query execution, answer rendering, and final result assembly.
+Ask Data now enters through `AskDataRuntime`, the public runtime and dependency
+composition boundary used by the CLI and eval harness. Internally it delegates
+orchestration to `AskDataGraph`, a small LangGraph workflow with explicit stages
+for memory read, intent policy, context building, provider resolution, LLM SQL
+generation, SQL validation, one optional SQL repair attempt, approval, query
+execution, answer rendering, memory write, and final result assembly.
 
 Every `queryforge ask` response includes:
 
 - `trace_id`: a stable diagnostic identity for that run.
 - `trace`: a bounded local timeline with step names, statuses, timings, policy metadata, generated SQL when available, normalized SQL when available, row count, preview rows, and errors.
+- `memory_read` / `memory_write`: bounded diagnostics showing whether same-session
+  memory was loaded, used, saved, or intentionally skipped.
 
 Langfuse export is optional. If `QUERYFORGE_OBSERVABILITY_PROVIDER` is unset or Langfuse keys are missing, QueryForge still returns local trace metadata and uses a no-op exporter. If Langfuse export fails, the query result keeps its real status and the export failure is recorded in the trace.
 
 Observability is diagnostic only. It cannot approve SQL generation, bypass intent or SQL policy, or authorize database execution.
+
+## Ask Data Memory
+
+Memory is a required workflow boundary, not an approval mechanism. Requests
+without a session still record skipped memory read/write steps and behave like
+single-turn Ask Data.
+
+Use `ask --session` for a single process call that participates in session memory,
+or use `chat --session` to ask multiple questions in one in-process session:
+
+```bash
+uv run queryforge ask --session local-demo "What is total revenue?"
+uv run queryforge chat --session local-demo
+```
+
+The current store is process-local. It remembers bounded turn summaries:
+question, status, SQL when available, columns, row count, preview rows, answer,
+trace id, and policy reason. Successful executed analyses also get an analysis
+reference for future dashboard work.
+
+Memory can help interpret follow-ups such as "break that down by category". It
+cannot approve SQL, bypass intent policy, bypass SQL validation, bypass read-only
+execution, or silently reuse old SQL without normal validation.
 
 ## Database Roles
 
@@ -169,7 +203,7 @@ provider, model, validation status, SQL policy code, and SQL policy reason.
 
 ## Ask Data Evaluations
 
-The first eval suite has 30 commerce and policy questions: 20 development and
+The first eval suite has 35 commerce and policy questions: 25 development and
 10 held-out cases. Every successful analytics task has independently declared
 expected values and a reference query that is checked against Postgres before
 trials begin.

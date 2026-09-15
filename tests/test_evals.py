@@ -10,6 +10,7 @@ from queryforge import cli, evals
 from queryforge.eval_cases import (
     DEFAULT_SUITE,
     EvalCase,
+    EvalPriorTurn,
     EvalSuite,
     grade_result,
     load_suite,
@@ -51,7 +52,7 @@ class FakeExecutor:
 def test_curated_suite_balanced_explicit_and_policy_valid():
     suite, digest = load_suite()
     assert len(digest) == 64
-    assert Counter(case.split for case in suite.cases) == {"dev": 20, "held-out": 10}
+    assert Counter(case.split for case in suite.cases) == {"dev": 25, "held-out": 10}
     for split in ("dev", "held-out"):
         assert {c.category for c in select_cases(suite, split)} == {
             "analytics",
@@ -62,6 +63,8 @@ def test_curated_suite_balanced_explicit_and_policy_valid():
     for case in suite.cases:
         if case.reference_sql:
             assert evaluate_sql_policy(case.reference_sql).status == "allowed", case.id
+        for turn in case.prior_turns:
+            assert evaluate_sql_policy(turn.reference_sql).status == "allowed", case.id
 
 
 @pytest.mark.parametrize(
@@ -95,6 +98,24 @@ def test_invalid_case_contracts(update):
 def test_invalid_repair_case_contracts(update):
     with pytest.raises(ValidationError):
         EvalCase.model_validate(case_for([[7]]).model_dump() | update)
+
+
+def test_local_policy_cases_cannot_define_prior_turns():
+    with pytest.raises(ValidationError):
+        EvalCase(
+            id="bad-memory-policy",
+            split="dev",
+            category="blocked",
+            question="Drop orders",
+            rationale="Blocked cases must stay local",
+            expected_status="blocked",
+            prior_turns=[
+                EvalPriorTurn(
+                    question="Count orders",
+                    reference_sql="SELECT COUNT(*) FROM orders",
+                )
+            ],
+        )
 
 
 def test_duplicate_ids_and_invalid_selection():
@@ -204,6 +225,55 @@ def test_repair_case_requires_trace_evidence() -> None:
         result,
         model_calls=2,
         executor_calls=1,
+        executed_sql=trial["executed_sql"],
+    )["diagnostics"].passed
+
+
+def test_multi_turn_case_requires_memory_diagnostics() -> None:
+    case = EvalCase(
+        id="memory-follow-up",
+        split="dev",
+        category="analytics",
+        question="Now return the same count again.",
+        rationale="Final question depends on same-session prior context.",
+        expected_status="ok",
+        reference_sql="SELECT COUNT(*) FROM orders",
+        expected_rows=[[7]],
+        prior_turns=[
+            EvalPriorTurn(
+                question="Count completed orders",
+                reference_sql="SELECT COUNT(*) FROM orders",
+            )
+        ],
+    )
+    trial = asyncio.run(
+        evals.run_trial(
+            case,
+            1,
+            lambda: evals.ReferenceProvider(
+                case.reference_sql,
+                outputs=case.scripted_sql_outputs(),
+            ),
+            FakeExecutor(),
+        )
+    )
+
+    assert trial["passed"]
+    assert trial["model_calls"] == 2
+    assert trial["executor_calls"] == 2
+    assert len(trial["prior_turns"]) == 1
+    assert trial["candidate_sql"] == [
+        "SELECT COUNT(*) FROM orders",
+        "SELECT COUNT(*) FROM orders",
+    ]
+
+    result = AskDataResult.model_validate(trial["result"])
+    result.trace.steps = [step for step in result.trace.steps if step.name != "memory_read"]
+    assert not grade_result(
+        case,
+        result,
+        model_calls=2,
+        executor_calls=2,
         executed_sql=trial["executed_sql"],
     )["diagnostics"].passed
 

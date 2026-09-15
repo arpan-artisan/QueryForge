@@ -5,6 +5,7 @@ import pytest
 
 from queryforge import cli
 from queryforge.llm import LLMNotConfiguredError
+from queryforge.memory import InMemorySessionStore
 from queryforge.models import ApprovedQuery, QueryResult
 from queryforge.observability import NoOpTraceExporter, ObservabilityConfig
 from queryforge.postgres import DemoDatabaseReadiness
@@ -16,8 +17,10 @@ class StubLLM:
 
     def __init__(self, sql: str = "SELECT COUNT(*) AS order_count FROM orders") -> None:
         self.sql = sql
+        self.calls: list[tuple[str, str]] = []
 
     async def generate_sql(self, question: str, schema_context: str) -> str:
+        self.calls.append((question, schema_context))
         return self.sql
 
 
@@ -72,6 +75,38 @@ def test_ask_command_prints_inspectable_json(monkeypatch, capsys) -> None:
     assert payload["rows"] == [{"order_count": 3}]
     assert payload["row_count"] == 1
     assert payload["answer"] == "Order Count is 3."
+    assert _step(payload, "memory_read")["status"] == "skipped"
+    assert _step(payload, "memory_write")["status"] == "skipped"
+
+
+def test_ask_command_reuses_session_memory_in_same_process(monkeypatch, capsys) -> None:
+    llm = StubLLM()
+    monkeypatch.setattr(cli, "create_llm_provider", lambda: llm)
+    monkeypatch.setattr(cli, "QueryExecutorTool", lambda: StubQueryTool())
+    monkeypatch.setattr(cli, "CLI_MEMORY", InMemorySessionStore())
+
+    asyncio.run(cli.ask("How many orders?", session_id="cli-session"))
+    first = json.loads(capsys.readouterr().out)
+    asyncio.run(cli.ask("Break that down by category", session_id="cli-session"))
+    second = json.loads(capsys.readouterr().out)
+
+    assert first["status"] == second["status"] == "ok"
+    assert _step(first, "memory_read")["metadata"]["used_turn_count"] == 0
+    assert _step(second, "memory_read")["metadata"]["used_turn_count"] == 1
+    assert "How many orders?" in llm.calls[1][1]
+
+
+def test_main_ask_accepts_session_argument(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(cli, "create_llm_provider", lambda: StubLLM())
+    monkeypatch.setattr(cli, "QueryExecutorTool", lambda: StubQueryTool())
+    monkeypatch.setattr(cli, "CLI_MEMORY", InMemorySessionStore())
+    monkeypatch.setattr("sys.argv", ["queryforge", "ask", "--session", "s", "How many orders?"])
+
+    cli.main()
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "ok"
+    assert _step(payload, "memory_read")["metadata"]["session_id_present"] is True
 
 
 def _provider_factory_that_should_not_be_called() -> StubLLM:

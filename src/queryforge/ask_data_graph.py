@@ -19,6 +19,7 @@ from queryforge.llm import (
     LLMProviderError,
     LLMUnsupportedQuestionError,
 )
+from queryforge.memory import MemoryContext, MemoryStore, NoMemoryStore, turn_from_result
 from queryforge.models import (
     AgentRequest,
     AgentStatus,
@@ -51,11 +52,12 @@ from queryforge.sql_safety import SQLSafetyError
 from queryforge.tools import QueryExecutorTool
 
 type LLMResolver = Callable[[], LLMProvider]
-type ContextBuilder = Callable[[AgentRequest], QueryContext]
+type ContextBuilder = Callable[[AgentRequest, MemoryContext], QueryContext]
 type SQLApprover = Callable[[SQLCandidate], tuple[ApprovedQuery | None, SQLPolicyDecision]]
 type TraceRecorderFactory = Callable[[str, str], TraceRecorder]
 
 WORKFLOW_STAGES = (
+    "memory_read",
     "intent_policy",
     "context_build",
     "provider_resolution",
@@ -72,6 +74,8 @@ class AskDataGraphState(TypedDict, total=False):
     trace_id: str
     llm_resolver: LLMResolver
     query_tool: QueryExecutorTool
+    memory_store: MemoryStore
+    memory_context: MemoryContext
     context_builder: ContextBuilder
     sql_approver: SQLApprover
     recorder: TraceRecorder
@@ -108,6 +112,7 @@ class AskDataGraph:
         *,
         llm_resolver: LLMResolver,
         query_tool: QueryExecutorTool,
+        memory_store: MemoryStore | None = None,
         context_builder: ContextBuilder | None = None,
         sql_approver: SQLApprover | None = None,
         trace_recorder_factory: TraceRecorderFactory | None = None,
@@ -116,6 +121,7 @@ class AskDataGraph:
     ) -> None:
         self._llm_resolver = llm_resolver
         self._query_tool = query_tool
+        self._memory_store = memory_store or NoMemoryStore()
         self._context_builder = context_builder or build_query_context
         self._sql_approver = sql_approver or approve_sql_candidate
         self._trace_recorder_factory = trace_recorder_factory or _default_trace_recorder_factory
@@ -131,6 +137,7 @@ class AskDataGraph:
             "trace_id": trace_id,
             "llm_resolver": self._llm_resolver,
             "query_tool": self._query_tool,
+            "memory_store": self._memory_store,
             "context_builder": self._context_builder,
             "sql_approver": self._sql_approver,
             "recorder": self._trace_recorder_factory(agent_request.question, trace_id),
@@ -148,9 +155,105 @@ class AskDataGraph:
         final_state = await self._graph.ainvoke(state)
         return final_state["result"]
 
+    async def load_memory(self, state: AskDataGraphState) -> dict[str, Any]:
+        started_at, started_perf = _start_timer()
+        request = state["request"]
+        store = state["memory_store"]
+        if request.session_id is None:
+            context = MemoryContext()
+            state["recorder"].record_step(
+                "memory_read",
+                "skipped",
+                metadata={
+                    "memory_store": store.name,
+                    "session_id_present": False,
+                    "considered_turn_count": 0,
+                    "used_turn_count": 0,
+                    "latest_analysis_id": None,
+                    "reason": "no_session",
+                },
+                started_at=started_at,
+                duration_ms=_elapsed_ms(started_perf),
+            )
+            return {"memory_context": context}
+        if store.name == "none":
+            context = MemoryContext(session_id=request.session_id)
+            state["recorder"].record_step(
+                "memory_read",
+                "skipped",
+                metadata={
+                    "memory_store": store.name,
+                    "session_id_present": True,
+                    "considered_turn_count": 0,
+                    "used_turn_count": 0,
+                    "latest_analysis_id": None,
+                    "reason": "stateless_memory_store",
+                },
+                started_at=started_at,
+                duration_ms=_elapsed_ms(started_perf),
+            )
+            return {"memory_context": context}
+
+        try:
+            context = store.load(request.session_id)
+        except Exception as exc:  # noqa: BLE001 - memory failure must not execute queries.
+            state["recorder"].record_step(
+                "memory_read",
+                "error",
+                metadata={
+                    "memory_store": store.name,
+                    "session_id_present": True,
+                    "error_category": "memory_read_failed",
+                },
+                error=str(exc),
+                started_at=started_at,
+                duration_ms=_elapsed_ms(started_perf),
+            )
+            return _terminal_update(
+                status="error",
+                answer="Memory read failed before Ask Data could run.",
+                failed_stage="memory_read",
+                skip_reason="memory_read_failed",
+            ) | {
+                "memory_context": MemoryContext(session_id=request.session_id),
+                "policy_code": "memory_read_failed",
+                "policy_reason": "Memory read failed before Ask Data could run.",
+            }
+
+        state["recorder"].record_step(
+            "memory_read",
+            "ok",
+            metadata={
+                "memory_store": store.name,
+                "session_id_present": True,
+                "considered_turn_count": len(context.recent_turns),
+                "used_turn_count": context.used_turn_count,
+                "latest_analysis_id": (
+                    context.latest_analysis.analysis_id if context.latest_analysis else None
+                ),
+                "selected_turns": [
+                    {
+                        "turn_id": turn.turn_id,
+                        "status": turn.status,
+                        "columns": turn.columns,
+                        "row_count": turn.row_count,
+                        "trace_id": turn.trace_id,
+                    }
+                    for turn in context.successful_turns
+                ],
+                "reason": "loaded",
+            },
+            started_at=started_at,
+            duration_ms=_elapsed_ms(started_perf),
+        )
+        return {"memory_context": context}
+
     async def evaluate_intent(self, state: AskDataGraphState) -> dict[str, Any]:
         started_at, started_perf = _start_timer()
-        decision = evaluate_intent_policy(state["request"].question)
+        decision = evaluate_intent_policy(
+            state["request"].question,
+            has_memory_context=state["memory_context"].used_turn_count > 0,
+        )
         status = _intent_trace_status(decision)
         updates: dict[str, Any] = {"intent_decision": decision}
 
@@ -180,13 +283,14 @@ class AskDataGraph:
 
     async def build_context(self, state: AskDataGraphState) -> dict[str, Any]:
         started_at, started_perf = _start_timer()
-        context = state["context_builder"](state["request"])
+        context = state["context_builder"](state["request"], state["memory_context"])
         state["recorder"].record_step(
             "context_build",
             "ok",
             metadata={
                 "schema_context_chars": len(context.schema_text),
                 "example_count": len(context.examples),
+                "memory_turn_count": state["memory_context"].used_turn_count,
             },
             started_at=started_at,
             duration_ms=_elapsed_ms(started_perf),
@@ -591,6 +695,8 @@ class AskDataGraph:
 
     async def finalize_result(self, state: AskDataGraphState) -> dict[str, AskDataResult]:
         status = state["status"]
+        result = _agent_result_from_state(state, state["recorder"].snapshot())
+        self._write_memory(state, result)
         state["recorder"].record_step(
             "final_result",
             _result_trace_status(status),
@@ -608,6 +714,83 @@ class AskDataGraph:
         result = _agent_result_from_state(state, trace)
         return {"result": result}
 
+    def _write_memory(self, state: AskDataGraphState, result: AskDataResult) -> None:
+        started_at, started_perf = _start_timer()
+        request = state["request"]
+        store = state["memory_store"]
+        if request.session_id is None:
+            state["recorder"].record_step(
+                "memory_write",
+                "skipped",
+                metadata={
+                    "memory_store": store.name,
+                    "session_id_present": False,
+                    "turn_written": False,
+                    "analysis_reference_written": False,
+                    "reason": "no_session",
+                },
+                started_at=started_at,
+                duration_ms=_elapsed_ms(started_perf),
+            )
+            return
+        if store.name == "none":
+            state["recorder"].record_step(
+                "memory_write",
+                "skipped",
+                metadata={
+                    "memory_store": store.name,
+                    "session_id_present": True,
+                    "turn_written": False,
+                    "analysis_reference_written": False,
+                    "reason": "stateless_memory_store",
+                },
+                started_at=started_at,
+                duration_ms=_elapsed_ms(started_perf),
+            )
+            return
+
+        turn = turn_from_result(
+            result,
+            preview_limit=state.get("trace_preview_rows", DEFAULT_TRACE_PREVIEW_ROWS),
+        )
+        try:
+            store.append(request.session_id, turn)
+        except Exception as exc:  # noqa: BLE001 - memory write must not fail the query result.
+            state["recorder"].record_step(
+                "memory_write",
+                "error",
+                metadata={
+                    "memory_store": store.name,
+                    "session_id_present": True,
+                    "turn_written": False,
+                    "analysis_reference_written": False,
+                    "error_category": "memory_write_failed",
+                },
+                error=str(exc),
+                started_at=started_at,
+                duration_ms=_elapsed_ms(started_perf),
+            )
+            return
+
+        state["recorder"].record_step(
+            "memory_write",
+            "ok",
+            metadata={
+                "memory_store": store.name,
+                "session_id_present": True,
+                "turn_written": True,
+                "analysis_reference_written": result.status == "ok" and result.sql is not None,
+                "stored_columns": turn.columns,
+                "stored_row_count": turn.row_count,
+                "preview_limit": state.get("trace_preview_rows", DEFAULT_TRACE_PREVIEW_ROWS),
+                "preview_rows": turn.preview_rows,
+                "truncated": turn.row_count > len(turn.preview_rows),
+                "trace_id": turn.trace_id,
+            },
+            started_at=started_at,
+            duration_ms=_elapsed_ms(started_perf),
+        )
+
     def _export_trace(self, state: AskDataGraphState, trace: RunTrace) -> RunTrace:
         trace_exporter = state.get("trace_exporter")
         if trace_exporter is None:
@@ -624,6 +807,7 @@ class AskDataGraph:
 
 def build_ask_data_graph(nodes: AskDataGraph):
     graph = StateGraph(AskDataGraphState)
+    graph.add_node("memory_read", nodes.load_memory)
     graph.add_node("intent_policy", nodes.evaluate_intent)
     graph.add_node("context_build", nodes.build_context)
     graph.add_node("provider_resolution", nodes.resolve_provider)
@@ -635,7 +819,12 @@ def build_ask_data_graph(nodes: AskDataGraph):
     graph.add_node("record_skipped_downstream", nodes.record_skipped_downstream)
     graph.add_node("final_result", nodes.finalize_result)
 
-    graph.add_edge(START, "intent_policy")
+    graph.add_edge(START, "memory_read")
+    graph.add_conditional_edges(
+        "memory_read",
+        _route_after_memory,
+        {"ready": "intent_policy", "terminal": "record_skipped_downstream"},
+    )
     graph.add_conditional_edges(
         "intent_policy",
         _route_after_intent,
@@ -708,6 +897,10 @@ def _terminal_update(
 
 def _route_after_intent(state: AskDataGraphState) -> str:
     return "allowed" if state["intent_decision"].status == "allowed" else "terminal"
+
+
+def _route_after_memory(state: AskDataGraphState) -> str:
+    return "terminal" if state.get("status") else "ready"
 
 
 def _route_after_provider(state: AskDataGraphState) -> str:

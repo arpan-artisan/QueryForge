@@ -28,6 +28,7 @@ from queryforge.eval_cases import (
     select_cases,
 )
 from queryforge.llm import LLMNotConfiguredError, LLMProvider, LLMProviderError, create_llm_provider
+from queryforge.memory import InMemorySessionStore
 from queryforge.models import AgentRequest, ApprovedQuery, QueryResult, SQLCandidate
 from queryforge.observability import redact_trace_payload
 from queryforge.postgres import get_database_url, require_demo_database_ready
@@ -141,19 +142,37 @@ async def run_trial(
     executor: QueryExecutorTool,
 ) -> dict:
     provider: RecordingProvider | None = None
+    providers: list[RecordingProvider] = []
     tool = RecordingExecutor(executor)
+    session_id = f"eval-{case.id}-{trial_number}" if case.prior_turns else None
 
     def resolve() -> RecordingProvider:
         nonlocal provider
-        provider = RecordingProvider(provider_factory())
+        if provider is None:
+            provider = RecordingProvider(provider_factory())
+            providers.append(provider)
         return provider
 
-    runtime = AskDataRuntime(llm_resolver=resolve, query_tool=tool)
+    runtime = AskDataRuntime(
+        llm_resolver=resolve,
+        query_tool=tool,
+        memory_store=InMemorySessionStore(),
+    )
     started = perf_counter()
     result = None
     error = None
+    prior_results = []
     try:
-        result = await runtime.run(AgentRequest(question=case.question, source="eval"))
+        for turn in case.prior_turns:
+            prior = await runtime.run(
+                AgentRequest(question=turn.question, source="eval", session_id=session_id)
+            )
+            prior_results.append(prior.model_dump(mode="json"))
+            if prior.status != "ok":
+                raise EvalSetupError(f"prior_turn_error:{case.id}:{prior.status}")
+        result = await runtime.run(
+            AgentRequest(question=case.question, source="eval", session_id=session_id)
+        )
     except httpx.TimeoutException:
         error = "provider_timeout"
     except httpx.HTTPError:
@@ -164,7 +183,7 @@ async def run_trial(
         # Preserve unexpected failures without serializing exception text or local credentials.
         error = f"harness_error:{type(exc).__name__}"
 
-    calls = provider.calls if provider else 0
+    calls = sum(item.calls for item in providers)
     if result:
         grades = grade_result(
             case,
@@ -175,8 +194,8 @@ async def run_trial(
         )
         if result.status == "error":
             error = (
-                tool.error_category
-                or (provider.error_category if provider else None)
+                    tool.error_category
+                    or next((item.error_category for item in providers if item.error_category), None)
                 or {
                     "llm_not_configured": "provider_configuration",
                     "llm_provider_error": "provider_error",
@@ -216,8 +235,9 @@ async def run_trial(
         "model": provider.model_name if provider else "not_called",
         "model_calls": calls,
         "executor_calls": tool.calls,
-        "candidate_sql": provider.outputs if provider else [],
+        "candidate_sql": [output for item in providers for output in item.outputs],
         "executed_sql": tool.executed_sql,
+        "prior_turns": prior_results,
         "result": result.model_dump(mode="json") if result else None,
     }
 
@@ -331,6 +351,22 @@ async def run_evaluations(
         }
         reference_tool = QueryExecutorTool(url)
         for case in cases:
+            for index, turn in enumerate(case.prior_turns, start=1):
+                try:
+                    actual = reference_tool.run(approved_reference_query(turn.reference_sql))
+                except Exception as exc:
+                    raise EvalSetupError(
+                        f"reference_error:{case.id}:prior-{index}:{type(exc).__name__}"
+                    ) from exc
+                report["reference_checks"].append(
+                    {
+                        "case_id": case.id,
+                        "prior_turn": index,
+                        "passed": True,
+                        "actual_row_count": actual.row_count,
+                        "sql": actual.sql,
+                    }
+                )
             if case.reference_sql is not None:
                 try:
                     actual = reference_tool.run(approved_reference_query(case.reference_sql))

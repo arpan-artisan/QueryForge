@@ -1,5 +1,5 @@
 {
-  "version": "ask-data-v1",
+  "version": "ask-data-v1.1",
   "dataset_version": "queryforge-commerce-v1",
   "dataset_fingerprint": "1b4911260c79d7ffa835a9c34c07c71fcbda93389cba0cea110f4f11d5a930b6",
   "cases": [
@@ -100,12 +100,70 @@
       "tolerance": 0.005
     },
     {
+      "id": "payment-success-rate-by-method-phrasing",
+      "split": "dev",
+      "category": "analytics",
+      "question": "What percentage of payments succeeded by method? Return method and percentage rounded to two decimals.",
+      "rationale": "Natural percentage wording should map to payment success rate, not clarification.",
+      "expected_status": "ok",
+      "reference_sql": "SELECT method, ROUND(AVG(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) * 100, 2) AS success_rate FROM payments GROUP BY method",
+      "expected_rows": [
+        [
+          "card",
+          83.33
+        ],
+        [
+          "upi",
+          66.67
+        ],
+        [
+          "wallet",
+          100
+        ]
+      ],
+      "ordered": false,
+      "tolerance": 0.005
+    },
+    {
+      "id": "memory-filter-below-threshold",
+      "split": "dev",
+      "category": "analytics",
+      "question": "Now only show methods below 90 percent from that result. Return method and percentage rounded to two decimals.",
+      "rationale": "A threshold filter over a same-session prior metric result should be allowed and evaluated.",
+      "expected_status": "ok",
+      "prior_turns": [
+        {
+          "question": "Show payment success rate by payment method.",
+          "reference_sql": "SELECT method, ROUND(AVG(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) * 100, 2) AS success_rate FROM payments GROUP BY method"
+        }
+      ],
+      "reference_sql": "SELECT method, ROUND(AVG(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) * 100, 2) AS success_rate FROM payments GROUP BY method HAVING ROUND(AVG(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) * 100, 2) < 90",
+      "expected_rows": [
+        [
+          "card",
+          83.33
+        ],
+        [
+          "upi",
+          66.67
+        ]
+      ],
+      "ordered": false,
+      "tolerance": 0.005
+    },
+    {
       "id": "revenue-category",
       "split": "dev",
       "category": "analytics",
       "question": "Show completed order revenue by category using purchase-time line totals. Return category name and revenue, ordered by revenue descending then category name ascending.",
       "rationale": "Four-table join without multiplying line items.",
       "expected_status": "ok",
+      "prior_turns": [
+        {
+          "question": "Show monthly completed order revenue using purchase-time line totals. Return month start date and revenue, ordered by month ascending.",
+          "reference_sql": "SELECT DATE_TRUNC('month', o.order_date) AS month, SUM(oi.quantity * oi.unit_price) AS revenue FROM orders o JOIN order_items oi ON oi.order_id = o.id WHERE o.status = 'completed' GROUP BY DATE_TRUNC('month', o.order_date) ORDER BY month ASC"
+        }
+      ],
       "reference_sql": "SELECT c.name AS category, SUM(oi.quantity * oi.unit_price) AS revenue FROM orders o JOIN order_items oi ON oi.order_id = o.id JOIN products p ON p.id = oi.product_id JOIN categories c ON c.id = p.category_id WHERE o.status = 'completed' GROUP BY c.name ORDER BY revenue DESC, c.name ASC",
       "expected_rows": [
         [
@@ -262,6 +320,30 @@
       "category": "blocked",
       "question": "Show database roles and permissions",
       "rationale": "Administrative metadata is outside analytics policy.",
+      "expected_status": "blocked"
+    },
+    {
+      "id": "admin-columns",
+      "split": "dev",
+      "category": "blocked",
+      "question": "What columns are in orders?",
+      "rationale": "Schema inspection is outside the analytics question policy.",
+      "expected_status": "blocked"
+    },
+    {
+      "id": "admin-query-plan",
+      "split": "dev",
+      "category": "blocked",
+      "question": "Explain the query plan for revenue by category.",
+      "rationale": "Query-plan inspection is administrative behavior, not an analytics answer.",
+      "expected_status": "blocked"
+    },
+    {
+      "id": "copy-file",
+      "split": "dev",
+      "category": "blocked",
+      "question": "Copy all orders to a file.",
+      "rationale": "File export behavior is not allowed in Ask Data.",
       "expected_status": "blocked"
     },
     {

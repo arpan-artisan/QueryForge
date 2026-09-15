@@ -388,6 +388,28 @@ def test_local_trace_recorder_redacts_readiness_failure_metadata() -> None:
     assert trace.steps[0].error == REDACTED
 
 
+def test_local_trace_recorder_redacts_memory_step_metadata() -> None:
+    recorder = LocalTraceRecorder("What is total revenue?", trace_id="qf_memory")
+
+    recorder.record_step(
+        "memory_write",
+        "ok",
+        metadata={
+            "memory_store": "in_memory",
+            "preview_rows": [
+                {
+                    "database_url": "postgresql://user:password@localhost/queryforge",
+                    "safe": "visible",
+                }
+            ],
+        },
+    )
+    trace = recorder.finish("ok")
+
+    assert trace.steps[0].metadata["preview_rows"][0]["database_url"] == REDACTED
+    assert trace.steps[0].metadata["preview_rows"][0]["safe"] == "visible"
+
+
 def test_local_trace_recorder_keeps_local_trace_without_external_side_effects() -> None:
     recorder = LocalTraceRecorder("What is total revenue?", trace_id="qf_noop")
 

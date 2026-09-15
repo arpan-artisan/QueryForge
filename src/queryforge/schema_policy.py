@@ -15,6 +15,7 @@ APPROVED_FUNCTIONS = frozenset(
         "if",
         "max",
         "min",
+        "nullif",
         "round",
         "sum",
     }

@@ -2,7 +2,11 @@
 
 This is the living diagram page for QueryForge. Update it whenever an OpenSpec change alters the user flow, module boundaries, core classes, result models, statuses, setup steps, or execution path.
 
-Current scope: local CLI Ask Data flow for a stabilized seven-table Postgres demo database with LangGraph orchestration, one bounded SQL repair attempt, bounded local traces, optional Langfuse export, execution-time demo database readiness checks, and reference/live evaluation commands.
+Current scope: local CLI Ask Data flow for a stabilized seven-table Postgres
+demo database with required memory read/write workflow boundaries, process-local
+session memory, LangGraph orchestration, one bounded SQL repair attempt, bounded
+local traces, optional Langfuse export, execution-time demo database readiness
+checks, and reference/live evaluation commands.
 
 ## Demo Schema
 
@@ -102,8 +106,8 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    user["User runs: queryforge ask <question>"] --> cli_main["cli.main()"]
-    cli_main --> cli_ask["cli.ask(question)"]
+    user["User runs: queryforge ask [--session id] <question> or queryforge chat --session id"] --> cli_main["cli.main()"]
+    cli_main --> cli_ask["cli.ask(question, session_id) or cli.chat(session_id)"]
 
     cli_ask --> obs_config["load_observability_config()"]
     obs_config --> obs_exporter["create_trace_exporter(config)"]
@@ -112,14 +116,20 @@ flowchart TD
 
     cli_ask --> query_tool["QueryExecutorTool()"]
     query_tool --> query_url["get_database_url() read-only execution URL"]
-    cli_ask --> runtime["AskDataRuntime(create_llm_provider, query_tool, trace_exporter, trace_preview_rows)"]
+    cli_ask --> memory_store["CLI process InMemorySessionStore"]
+    cli_ask --> runtime["AskDataRuntime(create_llm_provider, query_tool, memory_store, trace_exporter, trace_preview_rows)"]
 
-    runtime --> request["AgentRequest(question, source=cli)"]
+    runtime --> request["AgentRequest(question, source=cli, session_id?)"]
     request --> ask_graph["AskDataGraph.run(request)"]
     ask_graph --> trace_id["generate_trace_id()"]
     ask_graph --> recorder["LocalTraceRecorder(question, trace_id)"]
 
-    recorder --> intent_node["intent_policy node"]
+    recorder --> memory_read["memory_read node"]
+    memory_read --> memory_choice{"session_id present?"}
+    memory_choice -- no --> memory_skip["Record no-session memory skip"]
+    memory_choice -- yes --> load_memory["Load bounded same-session MemoryContext"]
+    load_memory --> intent_node["intent_policy node"]
+    memory_skip --> intent_node
     intent_node --> intent["evaluate_intent_policy(question)"]
     intent --> intent_decision{"IntentPolicyDecision.status"}
 
@@ -128,8 +138,8 @@ flowchart TD
     intent_decision -- clarification_required --> skip_intent
 
     intent_decision -- allowed --> context_node["context_build node"]
-    context_node --> context_builder["build_query_context(request)"]
-    context_builder --> query_context["QueryContext(schema_text, examples)"]
+    context_node --> context_builder["build_query_context(request, memory_context)"]
+    context_builder --> query_context["QueryContext(schema_text plus bounded memory context, examples)"]
 
     query_context --> provider_node["provider_resolution node"]
     provider_node --> provider_factory["create_llm_provider()"]
@@ -188,7 +198,8 @@ flowchart TD
     skip_sql --> final_node
     skip_execution --> final_node
 
-    final_node --> finish_trace["recorder.finish(status)"]
+    final_node --> memory_write["memory_write: save bounded turn summary or record skip/error"]
+    memory_write --> finish_trace["recorder.finish(status)"]
     finish_trace --> export_trace{"Trace exporter"}
     export_trace -- local/no-op --> result["AskDataResult with request_id, trace_id, and bounded trace"]
     export_trace -- Langfuse configured --> langfuse["Export RunTrace events to Langfuse"]
@@ -210,6 +221,7 @@ classDiagram
 
     class AskDataGraph {
         +run(request) AskDataResult
+        +load_memory(state) dict
         +evaluate_intent(state) dict
         +build_context(state) dict
         +resolve_provider(state) dict
@@ -227,6 +239,8 @@ classDiagram
         +str trace_id
         +TraceRecorder recorder
         +TraceExporter? trace_exporter
+        +MemoryStore memory_store
+        +MemoryContext? memory_context
         +ContextBuilder context_builder
         +QueryContext? context
         +LLMProvider? llm
@@ -256,7 +270,64 @@ classDiagram
     }
 
     class ContextFunctions {
-        +build_query_context(request, schema_text) QueryContext
+        +build_query_context(request, memory_context, schema_text) QueryContext
+    }
+
+    class MemoryStore {
+        <<Protocol>>
+        +str name
+        +load(session_id) MemoryContext
+        +append(session_id, turn) None
+        +clear(session_id) None
+    }
+
+    class InMemorySessionStore {
+        +str name
+        +int max_turns
+        +load(session_id) MemoryContext
+        +append(session_id, turn) None
+        +clear(session_id) None
+    }
+
+    class NoMemoryStore {
+        +str name
+        +load(session_id) MemoryContext
+        +append(session_id, turn) None
+        +clear(session_id) None
+    }
+
+    class MemoryContext {
+        +str? session_id
+        +list recent_turns
+        +AnalysisReference? latest_analysis
+        +int used_turn_count
+    }
+
+    class ConversationTurn {
+        +str turn_id
+        +str question
+        +AgentStatus status
+        +str? sql
+        +list columns
+        +int row_count
+        +list preview_rows
+        +str answer
+        +str trace_id
+        +str? policy_code
+        +str? policy_reason
+        +datetime created_at
+    }
+
+    class AnalysisReference {
+        +str analysis_id
+        +str question
+        +str approved_sql
+        +list columns
+        +int row_count
+        +list preview_rows
+        +str answer
+        +str trace_id
+        +datetime created_at
     }
 
     class GenerationFunctions {
@@ -455,6 +526,8 @@ classDiagram
     AskDataRuntime --> AskDataGraph
     AskDataGraph --> AskDataGraphState
     AskDataGraph --> AgentRequest
+    AskDataGraph --> MemoryStore
+    AskDataGraph --> MemoryContext
     AskDataGraph --> ContextFunctions
     AskDataGraph --> GenerationFunctions
     GenerationFunctions --> LLMProvider
@@ -476,6 +549,12 @@ classDiagram
     QueryExecutorTool --> ApprovedQuery
     QueryExecutorTool --> PostgresSupport
     QueryExecutorTool --> QueryResult
+    InMemorySessionStore ..|> MemoryStore
+    NoMemoryStore ..|> MemoryStore
+    InMemorySessionStore --> ConversationTurn
+    InMemorySessionStore --> AnalysisReference
+    MemoryContext --> ConversationTurn
+    MemoryContext --> AnalysisReference
     PostgresSupport --> DemoDatabaseContract
     PostgresSupport --> DemoDatabaseReadiness
     DemoDatabaseNotReadyError --> DemoDatabaseReadiness
@@ -506,10 +585,21 @@ flowchart TD
 
     init_db -. owner URL wrong or Docker down .-> setup_error["CLI setup error with owner URL guidance"]
     check_db -. missing, stale, or drifted demo data .-> setup_error["CLI readiness JSON with non-ready reason"]
-    ask -. allowed intent but missing Groq key .-> credential_error["CLI prints error JSON with trace_id and provider not_configured"]
-    ask -. validated SQL but demo DB not ready .-> readiness_error["CLI prints error JSON with demo_database_not_ready policy code"]
+    ask --> session_choice{"Use conversation memory?"}
+    session_choice -- single turn --> ask_single["uv run queryforge ask \"What is total revenue?\""]
+    session_choice -- same-process session --> ask_session["uv run queryforge ask --session local-demo \"What is total revenue?\""]
+    session_choice -- multi-turn --> chat_session["uv run queryforge chat --session local-demo"]
 
-    ask --> status{"What status comes back?"}
+    ask_single -. allowed intent but missing Groq key .-> credential_error["CLI prints error JSON with trace_id and provider not_configured"]
+    ask_session -. allowed intent but missing Groq key .-> credential_error
+    chat_session -. allowed intent but missing Groq key .-> credential_error
+    ask_single -. validated SQL but demo DB not ready .-> readiness_error["CLI prints error JSON with demo_database_not_ready policy code"]
+    ask_session -. validated SQL but demo DB not ready .-> readiness_error
+    chat_session -. validated SQL but demo DB not ready .-> readiness_error
+
+    ask_single --> status{"What status comes back?"}
+    ask_session --> status
+    chat_session --> status
     status -- ok --> success["User sees question, trace_id, trace timeline, answer, SQL, rows, row_count, provider, model, intent status, validation status, and policy reasons"]
     status -- blocked --> blocked["User sees original question, trace_id, blocked status, policy reason, skipped LLM/DB trace steps, and no LLM/DB call when intent-blocked"]
     status -- unsupported --> unsupported["User sees original question, trace_id, unsupported status, and intent, schema, or provider reason"]
@@ -517,7 +607,7 @@ flowchart TD
     status -- invalid --> invalid["User sees original question, trace_id, generated SQL, invalid status, parse reason, and skipped query execution"]
     status -- error --> error["User sees original question, trace_id, provider, validation, readiness, timeout, database, or observability export failure reason"]
 
-    success --> next_question["Ask another question"]
+    success --> next_question["Ask another question; same chat session can reuse bounded prior context"]
     blocked --> revise["Revise the question or inspect generated SQL when SQL exists"]
     unsupported --> revise
     clarification --> clarify_question["Add the missing metric, dimension, entity, time range, or scope"]
@@ -548,8 +638,13 @@ flowchart TD
     calibrate --> reference_exec["Reference SQL through QueryExecutorTool as ApprovedQuery"]
     reference_exec --> reference_grade["rows_match against declared expected rows"]
     reference_grade --> fresh["Fresh agent, recording provider, recording executor per trial"]
-    fresh --> request["AgentRequest(question, source=eval)"]
-    request --> runtime["AskDataRuntime.run using normal workflow"]
+    fresh --> memory_eval{"Case has prior_turns?"}
+    memory_eval -- yes --> prior_session["Create fresh in-process memory session"]
+    prior_session --> prior_runs["Run each prior turn through AskDataRuntime"]
+    prior_runs --> request_final["Final AgentRequest(question, source=eval, same session_id)"]
+    memory_eval -- no --> request_single["AgentRequest(question, source=eval)"]
+    request_final --> runtime["AskDataRuntime.run using normal workflow"]
+    request_single --> runtime
     runtime --> intent_check{"Normal intent policy"}
     intent_check -- allowed --> mode{"Provider mode"}
     mode -- reference --> scripted["ReferenceProvider returns reference SQL or scripted initial/repair SQL"]
@@ -589,6 +684,7 @@ classDiagram
         +str split
         +str question
         +str expected_status
+        +list prior_turns
         +str reference_sql
         +str initial_sql
         +str repair_sql
@@ -596,6 +692,10 @@ classDiagram
         +list expected_rows
         +bool ordered
         +float tolerance
+    }
+    class EvalPriorTurn {
+        +str question
+        +str reference_sql
     }
     class Grade {
         +bool passed
@@ -630,6 +730,7 @@ classDiagram
         +grade_result(case, result, model_calls, executor_calls, executed_sql) dict
     }
     EvalSuite *-- EvalCase
+    EvalCase *-- EvalPriorTurn
     ReferenceProvider ..|> LLMProvider
     RecordingProvider ..|> LLMProvider
     RecordingProvider --> LLMProvider

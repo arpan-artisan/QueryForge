@@ -26,6 +26,9 @@ ANALYTICAL_METRIC_TERMS = (
     "payment success rate",
     "successful payments",
     "failed payments",
+    "percentage",
+    "percent",
+    "succeeded",
     "average order value",
     "aov",
     "count",
@@ -53,6 +56,21 @@ BUSINESS_TERMS = (
     "revenue",
     "sales",
     "status",
+    "channel",
+)
+KNOWN_FILTER_TERMS = (
+    "completed",
+    "refunded",
+    "pending",
+    "cancelled",
+    "succeeded",
+    "failed",
+    "web",
+    "retail",
+    "partner",
+    "card",
+    "upi",
+    "wallet",
 )
 DIMENSION_TERMS = (
     "by product",
@@ -60,6 +78,7 @@ DIMENSION_TERMS = (
     "by customer",
     "by status",
     "by channel",
+    "by method",
     "by payment method",
     "by date",
     "by day",
@@ -70,6 +89,7 @@ DIMENSION_TERMS = (
     "per customer",
     "per status",
     "per channel",
+    "per method",
     "per payment method",
     "per day",
     "per week",
@@ -89,6 +109,20 @@ TREND_TERMS = (
 )
 RANKING_TERMS = ("top", "highest", "lowest", "best", "worst", "rank", "ranking")
 COMPARISON_TERMS = ("compare", "comparison", " versus ", " vs ", "against")
+FOLLOW_UP_TERMS = (
+    "that",
+    "same",
+    "previous",
+    "last result",
+    "last query",
+    "those",
+    "these",
+    "higher",
+    "there",
+    "break it down",
+    "split it",
+    "now",
+)
 LOOKUP_TERMS = (
     "order id",
     "order number",
@@ -161,14 +195,17 @@ BYPASS_PATTERNS = (
 )
 DESTRUCTIVE_PATTERNS = (
     r"\b(drop|truncate)\s+(the\s+)?(table|database|schema|orders?|customers?|products?|payments?|refunds?)\b",
-    r"\bdelete\s+(from|all|rows?|records?|orders?|customers?|products?|payments?|refunds?)\b",
-    r"\bremove\s+(rows?|records?|orders?|customers?|products?|payments?|refunds?)\b",
-    r"\b(update|insert|alter|create)\s+(table|row|rows|record|records|orders?|customers?|products?|payments?|refunds?)\b",
+    r"\bdelete\s+(from|all|that|those|these|rows?|records?|orders?|customers?|products?|categories?|payments?|refunds?)\b",
+    r"\bremove\s+(that|those|these|rows?|records?|orders?|customers?|products?|categories?|payments?|refunds?)\b",
+    r"\b(update|insert|alter)\b.*\b(table|row|rows|record|records|orders?|customers?|products?|categories?|payments?|refunds?)\b",
+    r"\bcreate\s+((temporary|temp)\s+)?table\b",
+    r"\bcreate\b.*\b(row|rows|record|records|orders?|customers?|products?|categories?|payments?|refunds?)\b",
     r"\bgrant\s+",
     r"\brevoke\s+",
     r"\block\s+(table|rows?|records?)\b",
     r"\bexecute\s+(function|procedure|sql|statement)\b",
     r"\bimport\s+(data|rows?|records?|csv|file)\b",
+    r"\bcopy\b.*\b(file|csv|database|table|orders?|customers?|products?|payments?|refunds?)\b",
     r"\bexport\s+(database|table|all|records?|rows?|data)\b",
     r"\bmutate\s+(data|database|rows?|records?)\b",
     r"\bmodify\s+(data|database|rows?|records?)\b",
@@ -193,6 +230,9 @@ ADMINISTRATIVE_PATTERNS = (
     r"\bsystem tables?\b",
     r"\blist\s+(tables|schemas|databases|roles|users|permissions|privileges)\b",
     r"\bshow\s+(tables|schemas|databases|roles|users|permissions|privileges)\b",
+    r"\b(what|which|show|list)\s+columns?\b",
+    r"\bdescribe\s+(table|schema|orders?|customers?|products?|payments?|refunds?)\b",
+    r"\bexplain\s+(the\s+)?(analyze\s+)?(query\s+)?plan\b",
     r"\b(role|roles|permission|permissions|privilege|privileges)\b",
     r"\b(extension|extensions)\b",
     r"\bfile access\b",
@@ -228,7 +268,7 @@ CLARIFICATION_BROAD_PATTERNS = (
 )
 
 
-def evaluate_intent_policy(question: str) -> IntentPolicyDecision:
+def evaluate_intent_policy(question: str, *, has_memory_context: bool = False) -> IntentPolicyDecision:
     normalized = _normalize_question(question)
 
     if not normalized:
@@ -288,6 +328,14 @@ def evaluate_intent_policy(question: str) -> IntentPolicyDecision:
     unsupported = _unsupported_decision(normalized)
     if unsupported is not None:
         return unsupported
+
+    if has_memory_context and _is_safe_memory_follow_up(normalized):
+        return _decision(
+            "allowed",
+            "allowed_analytical",
+            "allowed_memory_follow_up",
+            "The request is a same-session analytical follow-up over approved demo data.",
+        )
 
     clarification = _clarification_decision(normalized)
     if clarification is not None:
@@ -491,6 +539,16 @@ def _has_metric_or_business_count(normalized: str) -> bool:
     return _matches_any(normalized, (r"\bhow many\s+(customers|products|refunds)\b",))
 
 
+def _is_safe_memory_follow_up(normalized: str) -> bool:
+    if not _contains_any(normalized, FOLLOW_UP_TERMS):
+        return False
+    return (
+        _contains_any(normalized, DIMENSION_TERMS + TREND_TERMS + RANKING_TERMS + COMPARISON_TERMS)
+        or _has_metric_or_business_count(normalized)
+        or _matches_any(normalized, (r"\bbreak\s*down\b", r"\bsplit\b", r"\bfilter\b"))
+    )
+
+
 def _is_bounded_lookup(normalized: str) -> bool:
     if _contains_any(normalized, LOOKUP_TERMS) and _matches_any(normalized, (r"\b\d+\b",)):
         return True
@@ -529,12 +587,22 @@ def _has_unclear_time_range(normalized: str) -> bool:
 def _has_ambiguous_entity(normalized: str) -> bool:
     if not _has_metric_or_business_count(normalized):
         return False
+    if (
+        _contains_any(normalized, DIMENSION_TERMS)
+        or _is_bounded_lookup(normalized)
+        or _has_known_filter_after_for(normalized)
+    ):
+        return False
     if _matches_any(
         normalized,
         (r"\bfor\s+(customer|product|category|status|channel|payment method|order|payment|refund)\b",),
     ):
         return False
     return _matches_any(normalized, (r"\bfor\s+[a-z][\w'-]*\b",))
+
+
+def _has_known_filter_after_for(normalized: str) -> bool:
+    return _matches_any(normalized, (rf"\bfor\s+({'|'.join(KNOWN_FILTER_TERMS)})\b",))
 
 
 def _has_multiple_safe_interpretations(normalized: str) -> bool:

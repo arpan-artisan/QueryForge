@@ -9,21 +9,28 @@ and deterministic graders; no extra evaluation framework is needed.
 
 ## What We Measure
 
-`evals/ask-data/cases.json` contains 30 tasks, including 18 analytics tasks and
-12 local policy tasks. Development has 20 tasks; held-out has 10. Every split
+`evals/ask-data/cases.json` contains 35 tasks, including 20 analytics tasks and
+15 local policy tasks. Development has 25 tasks; held-out has 10. Every split
 contains analytics, blocked, unsupported, and clarification cases.
 
 Analytics include revenue definitions, refunds, payment success, average order
-value, rankings, categories, monthly totals, lookup, empty results, and historical
-prices. Questions explicitly define which order statuses contribute, the desired
-fields, and ordering when relevant. Expected answers are manually specified from
-the seed and documented facts, rather than generated from the LLM being measured.
+value, rankings, categories, monthly totals, lookup, memory follow-up filters,
+empty results, and historical prices. Questions explicitly define which order
+statuses contribute, the desired fields, and ordering when relevant. Expected
+answers are manually specified from the seed and documented facts, rather than
+generated from the LLM being measured.
 
 Negative cases test both appropriate refusals and, through allowed analytics,
 whether the system is refusing too much. Scripted malicious model responses
 (stacked statements, writes, modifying CTEs, unapproved functions, invalid SQL,
 invented tables, and unsafe repair attempts) additionally exercise downstream
 guardrails in pytest.
+
+The suite also includes same-session memory coverage without increasing the
+task count. A case can define `prior_turns`; the runner executes those turns in
+the same fresh session before grading the final question. Existing clarification
+cases cover missing-memory behavior where a follow-up-like request has no usable
+prior context.
 
 ## Two Modes
 
@@ -33,10 +40,11 @@ guardrails in pytest.
 | `live` | The existing configured LLM connector, currently Groq | This model and the current agent answered these selected questions correctly |
 
 Both run `AskDataRuntime` and the existing LangGraph. Both use normal schema context,
-intent checks, SQL checks, read-only executor, row limits, readiness checks, and
-local traces. Reference SQL and expected rows are never added to live prompts.
-Neither mode exports to Langfuse: transcripts are local so exporter/network
-failures do not alter eval execution. Normal `ask` observability is unchanged.
+same-session memory when a case defines prior turns, intent checks, SQL checks,
+read-only executor, row limits, readiness checks, and local traces. Reference SQL
+and expected rows are never added to live prompts. Neither mode exports to
+Langfuse: transcripts are local so exporter/network failures do not alter eval
+execution. Normal `ask` observability is unchanged.
 
 No live LLM is called by normal pytest or CI. A test double labelled as live in
 unit tests only verifies wiring; it is not evidence of model performance.
@@ -105,6 +113,14 @@ Partial credit shows which dimensions passed. It never turns an unsafe or wrong
 answer into a task success: all applicable grades must pass. Diagnostic grading
 does not insist on one exact order of graph nodes. We do not judge natural-language
 prose quality yet; current answers are deterministic renderings of result rows.
+
+Memory cases can define scripted `prior_turns`, each with a question and
+reference SQL. Reference mode runs those prior turns first through the normal
+workflow and in-process memory store, then grades the final turn. A memory case
+only passes when the final turn uses same-session context, still executes through
+normal approval/read-only execution, returns expected rows, and records bounded
+memory read/write diagnostics. Memory evidence is diagnostic only; it is never
+treated as SQL approval.
 
 Repair-loop cases can define scripted `initial_sql`, `repair_sql`, and
 `expected_repair_attempts`. Reference mode then returns the scripted SQL outputs

@@ -5,7 +5,8 @@ import pytest
 
 from queryforge.ask_data_graph import AskDataGraph
 from queryforge.llm import LLMNotConfiguredError, LLMProviderError, LLMUnsupportedQuestionError
-from queryforge.models import ApprovedQuery, QueryResult
+from queryforge.memory import ConversationTurn, InMemorySessionStore
+from queryforge.models import AgentRequest, ApprovedQuery, QueryResult
 from queryforge.observability import LocalTraceRecorder
 from queryforge.postgres import DemoDatabaseNotReadyError, DemoDatabaseReadiness
 
@@ -121,6 +122,11 @@ class FailingTraceExporter:
         raise RuntimeError("failed with Authorization: Bearer export-token")
 
 
+class FailingMemoryStore(InMemorySessionStore):
+    def append(self, session_id: str, turn: ConversationTurn) -> None:
+        raise RuntimeError("memory write failed with Authorization: Bearer memory-token")
+
+
 def test_ask_data_graph_success_runs_all_major_stages() -> None:
     llm = StubLLM("SELECT COUNT(*) AS order_count FROM orders")
     query_tool = StubQueryTool()
@@ -133,6 +139,7 @@ def test_ask_data_graph_success_runs_all_major_stages() -> None:
     assert result.trace_id.startswith("qf_")
     assert result.trace is not None
     assert [step.name for step in result.trace.steps] == [
+        "memory_read",
         "intent_policy",
         "context_build",
         "provider_resolution",
@@ -141,24 +148,145 @@ def test_ask_data_graph_success_runs_all_major_stages() -> None:
         "query_approval",
         "query_execution",
         "answer_rendering",
+        "memory_write",
         "final_result",
     ]
-    assert [step.status for step in result.trace.steps] == ["ok"] * 9
+    assert [step.status for step in result.trace.steps] == ["skipped"] + ["ok"] * 8 + ["skipped", "ok"]
     assert result.trace.duration_ms is not None
     assert all(step.duration_ms >= 0 for step in result.trace.steps)
-    assert result.trace.steps[0].metadata["intent_status"] == "allowed"
-    assert result.trace.steps[1].metadata["schema_context_chars"] > 0
-    assert result.trace.steps[3].metadata["provider"] == "stub"
-    assert result.trace.steps[3].metadata["model"] == "graph-test"
-    assert result.trace.steps[4].metadata["validation_status"] == "allowed"
-    assert result.trace.steps[5].metadata["policy_code"] == "query_allowed"
-    execution_step = result.trace.steps[6]
+    assert result.trace.steps[0].metadata["reason"] == "no_session"
+    assert result.trace.steps[1].metadata["intent_status"] == "allowed"
+    assert result.trace.steps[2].metadata["schema_context_chars"] > 0
+    assert result.trace.steps[4].metadata["provider"] == "stub"
+    assert result.trace.steps[4].metadata["model"] == "graph-test"
+    assert result.trace.steps[5].metadata["validation_status"] == "allowed"
+    assert result.trace.steps[6].metadata["policy_code"] == "query_allowed"
+    execution_step = result.trace.steps[7]
     assert execution_step.metadata["row_count"] == 1
     assert execution_step.metadata["preview_rows"] == [{"order_count": 3}]
-    assert result.trace.steps[7].metadata["row_count"] == 1
-    assert result.trace.steps[8].metadata["status"] == "ok"
+    assert result.trace.steps[8].metadata["row_count"] == 1
+    assert result.trace.steps[9].metadata["reason"] == "no_session"
+    assert result.trace.steps[10].metadata["status"] == "ok"
     assert llm.calls
     assert query_tool.calls
+
+
+def test_ask_data_graph_uses_same_session_memory_in_context() -> None:
+    llm = StubLLM("SELECT COUNT(*) AS order_count FROM orders")
+    query_tool = StubQueryTool()
+    memory = InMemorySessionStore()
+    memory.append(
+        "session-a",
+        ConversationTurn(
+            question="Show completed revenue",
+            status="ok",
+            sql="SELECT SUM(oi.quantity * oi.unit_price) FROM orders o JOIN order_items oi ON oi.order_id = o.id WHERE o.status = 'completed'",
+            columns=["sum"],
+            row_count=1,
+            preview_rows=[{"sum": 2040}],
+            answer="Sum is 2040.",
+            trace_id="qf_prior",
+        ),
+    )
+    graph = AskDataGraph(
+        llm_resolver=lambda: llm,
+        query_tool=query_tool,  # type: ignore[arg-type]
+        memory_store=memory,
+    )
+
+    result = asyncio.run(
+        graph.run(AgentRequest(question="Break that down by category", session_id="session-a"))
+    )
+
+    assert result.status == "ok"
+    assert "Show completed revenue" in llm.calls[0][1]
+    assert "Preview rows: [{'sum': 2040}]" in llm.calls[0][1]
+    assert result.trace is not None
+    read_step = _step(result, "memory_read")
+    write_step = _step(result, "memory_write")
+    assert read_step.status == "ok"
+    assert read_step.metadata["used_turn_count"] == 1
+    assert write_step.status == "ok"
+    assert write_step.metadata["turn_written"] is True
+    assert len(memory.load("session-a").recent_turns) == 2
+
+
+def test_ask_data_graph_keeps_sessions_isolated() -> None:
+    llm = StubLLM("SELECT COUNT(*) AS order_count FROM orders")
+    memory = InMemorySessionStore()
+    memory.append(
+        "other-session",
+        ConversationTurn(
+            question="Private previous analysis",
+            status="ok",
+            answer="Do not leak.",
+            trace_id="qf_other",
+        ),
+    )
+    graph = AskDataGraph(
+        llm_resolver=lambda: llm,
+        query_tool=StubQueryTool(),  # type: ignore[arg-type]
+        memory_store=memory,
+    )
+
+    result = asyncio.run(
+        graph.run(AgentRequest(question="How many orders?", session_id="session-a"))
+    )
+
+    assert result.status == "ok"
+    assert "Private previous analysis" not in llm.calls[0][1]
+    assert _step(result, "memory_read").metadata["used_turn_count"] == 0
+
+
+def test_ask_data_graph_memory_context_cannot_approve_unsafe_sql() -> None:
+    llm = StubLLM("DROP TABLE orders")
+    query_tool = StubQueryTool()
+    memory = InMemorySessionStore()
+    memory.append(
+        "session-a",
+        ConversationTurn(
+            question="Remember this unsafe SQL",
+            status="ok",
+            sql="DROP TABLE orders",
+            answer="Unsafe.",
+            trace_id="qf_prior",
+        ),
+    )
+    graph = AskDataGraph(
+        llm_resolver=lambda: llm,
+        query_tool=query_tool,  # type: ignore[arg-type]
+        memory_store=memory,
+    )
+
+    result = asyncio.run(
+        graph.run(AgentRequest(question="What is total revenue?", session_id="session-a"))
+    )
+
+    assert result.status == "blocked"
+    assert result.policy_code == "non_select_statement"
+    assert query_tool.calls == []
+    assert _step(result, "memory_read").status == "ok"
+
+
+def test_ask_data_graph_memory_write_failure_does_not_change_success() -> None:
+    llm = StubLLM("SELECT COUNT(*) AS order_count FROM orders")
+    query_tool = StubQueryTool()
+    graph = AskDataGraph(
+        llm_resolver=lambda: llm,
+        query_tool=query_tool,  # type: ignore[arg-type]
+        memory_store=FailingMemoryStore(),
+    )
+
+    result = asyncio.run(
+        graph.run(AgentRequest(question="How many orders?", session_id="session-a"))
+    )
+
+    assert result.status == "ok"
+    assert result.trace is not None
+    write_step = _step(result, "memory_write")
+    assert write_step.status == "error"
+    assert write_step.metadata["error_category"] == "memory_write_failed"
+    assert write_step.error == "[REDACTED]"
 
 
 def test_ask_data_graph_runs_with_fake_llm_executor_and_recorder() -> None:
@@ -610,3 +738,10 @@ def _step_status(result, step_name: str) -> str:
     matches = [step for step in result.trace.steps if step.name == step_name]
     assert matches
     return matches[0].status
+
+
+def _step(result, step_name: str):
+    assert result.trace is not None
+    matches = [step for step in result.trace.steps if step.name == step_name]
+    assert matches
+    return matches[0]

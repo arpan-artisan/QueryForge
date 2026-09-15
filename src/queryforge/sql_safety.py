@@ -156,6 +156,13 @@ def _validate_ast(expression: exp.Select, original_sql: str) -> SQLPolicyDecisio
         )
 
     for select in expression.find_all(exp.Select):
+        with_expression = select.args.get("with_")
+        if isinstance(with_expression, exp.With) and with_expression.args.get("recursive"):
+            return _blocked(
+                "recursive_cte_not_allowed",
+                "Recursive CTEs are not allowed in Ask Data SQL.",
+                original_sql,
+            )
         if select.args.get("into") is not None:
             return _blocked(
                 "select_into_not_allowed",
@@ -169,6 +176,10 @@ def _validate_ast(expression: exp.Select, original_sql: str) -> SQLPolicyDecisio
                 original_sql,
             )
 
+    join_decision = _validate_join_shapes(expression, original_sql)
+    if join_decision is not None:
+        return join_decision
+
     star_decision = _validate_stars(expression, original_sql)
     if star_decision is not None:
         return star_decision
@@ -180,6 +191,43 @@ def _validate_ast(expression: exp.Select, original_sql: str) -> SQLPolicyDecisio
     return _validate_select_scope(
         expression, original_sql, inherited_sources={}, visited_selects=set()
     )
+
+
+def _validate_join_shapes(expression: exp.Select, original_sql: str) -> SQLPolicyDecision | None:
+    for select in expression.find_all(exp.Select):
+        left_table = _direct_from_table(select)
+        for join in select.args.get("joins") or ():
+            joined_table = join.this if isinstance(join.this, exp.Table) else None
+            if (
+                left_table is not None
+                and joined_table is not None
+                and _is_approved_base_table(left_table)
+                and _is_approved_base_table(joined_table)
+                and (
+                    join.args.get("kind") == "CROSS"
+                    or (join.args.get("on") is None and join.args.get("using") is None)
+                )
+            ):
+                return _blocked(
+                    "cross_join_not_allowed",
+                    "Direct cross joins between approved base tables are not allowed.",
+                    original_sql,
+                )
+    return None
+
+
+def _direct_from_table(select: exp.Select) -> exp.Table | None:
+    from_expression = select.args.get("from_")
+    if not isinstance(from_expression, exp.From):
+        return None
+    source = from_expression.this
+    return source if isinstance(source, exp.Table) else None
+
+
+def _is_approved_base_table(table: exp.Table) -> bool:
+    table_name = _normalize_identifier(table.this)
+    schema_name = _normalize_identifier(table.args.get("db"))
+    return (not schema_name or schema_name == APPROVED_SCHEMA_NAME) and is_approved_table(table_name)
 
 
 def _validate_stars(expression: exp.Expression, original_sql: str) -> SQLPolicyDecision | None:
@@ -226,6 +274,8 @@ def _validate_functions(expression: exp.Expression, original_sql: str) -> SQLPol
                 )
 
     for function in expression.find_all(exp.Func):
+        if isinstance(function, exp.Connector):
+            continue
         if isinstance(function, exp.Cast):
             cast_decision = _validate_cast(function, original_sql)
             if cast_decision is not None:
@@ -495,7 +545,9 @@ def _validate_direct_columns(
                 original_sql,
             )
 
-        if column_name in orderable_aliases and _has_ancestor(column, exp.Order):
+        if column_name in orderable_aliases and (
+            _has_ancestor(column, exp.Order) or _has_ancestor(column, exp.Group)
+        ):
             continue
 
         matching_sources = [source for source, columns in sources.items() if column_name in columns]

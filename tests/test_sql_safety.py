@@ -42,7 +42,9 @@ def test_allows_approved_tables_and_columns(sql: str) -> None:
         "SELECT MAX(order_date) AS last_order FROM orders",
         "SELECT ROUND(SUM(amount), 2) AS refund_amount FROM refunds",
         "SELECT COALESCE(SUM(amount), 0) AS refund_amount FROM refunds",
+        "SELECT SUM(amount) / NULLIF(COUNT(*), 0) AS refund_per_row FROM refunds",
         "SELECT DATE_TRUNC('month', order_date) AS month, COUNT(*) AS orders FROM orders GROUP BY 1",
+        "SELECT DATE_TRUNC('month', order_date) AS month, COUNT(*) AS orders FROM orders GROUP BY month",
     ],
 )
 def test_allows_approved_analytical_functions(sql: str) -> None:
@@ -60,9 +62,21 @@ def test_allows_approved_analytical_functions(sql: str) -> None:
         JOIN order_items oi ON oi.order_id = o.id
         JOIN products p ON p.id = oi.product_id
         JOIN categories c ON c.id = p.category_id
-        WHERE o.status = 'completed'
+        WHERE o.status = 'completed' AND o.channel = 'web'
         GROUP BY c.name
         ORDER BY revenue DESC
+        """,
+        """
+        SELECT status, COUNT(*) AS orders
+        FROM orders
+        WHERE status = 'completed' OR status = 'refunded'
+        GROUP BY status
+        """,
+        """
+        SELECT status, COUNT(*) AS order_count
+        FROM orders
+        GROUP BY status
+        HAVING COUNT(*) > 1
         """,
         """
         SELECT
@@ -191,6 +205,15 @@ def test_blocks_data_modifying_ctes(sql: str) -> None:
     assert decision.code == "mutating_operation_not_allowed"
 
 
+def test_blocks_recursive_ctes() -> None:
+    decision = evaluate_sql_policy(
+        "WITH RECURSIVE x AS (SELECT id FROM orders) SELECT id FROM x"
+    )
+
+    assert decision.status == "blocked"
+    assert decision.code == "recursive_cte_not_allowed"
+
+
 @pytest.mark.parametrize(
     ("sql", "code"),
     [
@@ -221,6 +244,39 @@ def test_blocks_star_projection(sql: str) -> None:
 
     assert decision.status == "blocked"
     assert decision.code == "star_projection_not_allowed"
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT o.id, c.id FROM orders o CROSS JOIN customers c",
+        "SELECT o.id, c.id FROM orders o, customers c",
+    ],
+)
+def test_blocks_direct_approved_table_cross_joins(sql: str) -> None:
+    decision = evaluate_sql_policy(sql)
+
+    assert decision.status == "blocked"
+    assert decision.code == "cross_join_not_allowed"
+
+
+def test_allows_scalar_cte_cross_join() -> None:
+    decision = evaluate_sql_policy(
+        """
+        WITH gross AS (
+            SELECT SUM(oi.quantity * oi.unit_price) AS gross_revenue
+            FROM orders o
+            JOIN order_items oi ON oi.order_id = o.id
+        ),
+        refunds_sum AS (
+            SELECT SUM(amount) AS refund_amount FROM refunds
+        )
+        SELECT gross_revenue - refund_amount AS net_revenue
+        FROM gross CROSS JOIN refunds_sum
+        """
+    )
+
+    assert decision.status == "allowed"
 
 
 def test_malformed_sql_is_invalid() -> None:

@@ -6,22 +6,47 @@ from pathlib import Path
 import psycopg
 
 from queryforge.llm import create_llm_provider
+from queryforge.memory import InMemorySessionStore
+from queryforge.models import AgentRequest
 from queryforge.observability import create_trace_exporter, load_observability_config
 from queryforge.postgres import DEFAULT_DATABASE_OWNER_URL, check_demo_database_ready, init_database
 from queryforge.runtime import AskDataRuntime
 from queryforge.tools import QueryExecutorTool
 
+CLI_MEMORY = InMemorySessionStore()
 
-async def ask(question: str) -> None:
+
+def _runtime() -> AskDataRuntime:
     observability_config = load_observability_config()
-    runtime = AskDataRuntime(
+    return AskDataRuntime(
         llm_resolver=create_llm_provider,
         query_tool=QueryExecutorTool(),
+        memory_store=CLI_MEMORY,
         trace_exporter=create_trace_exporter(observability_config),
         trace_preview_rows=observability_config.trace_preview_rows,
     )
-    response = await runtime.run(question)
+
+
+async def ask(question: str, session_id: str | None = None) -> None:
+    response = await _runtime().run(
+        AgentRequest(question=question, session_id=session_id, source="cli")
+    )
     print(response.model_dump_json(indent=2))
+
+
+async def chat(session_id: str) -> None:
+    runtime = _runtime()
+    while True:
+        try:
+            question = input("> ").strip()
+        except EOFError:
+            return
+        if question.casefold() in {"", "exit", "quit"}:
+            return
+        response = await runtime.run(
+            AgentRequest(question=question, session_id=session_id, source="cli")
+        )
+        print(response.model_dump_json(indent=2))
 
 
 def main() -> None:
@@ -34,7 +59,11 @@ def main() -> None:
     subparsers.add_parser("check-db", help="Check whether the local demo database is ready.")
 
     ask_parser = subparsers.add_parser("ask", help="Ask the NL2SQL agent a question.")
+    ask_parser.add_argument("--session", help="Session id for same-process memory context.")
     ask_parser.add_argument("question", nargs="+", help="Question to ask.")
+
+    chat_parser = subparsers.add_parser("chat", help="Ask multiple questions in one memory session.")
+    chat_parser.add_argument("--session", required=True, help="Session id for this chat.")
 
     evals_parser = subparsers.add_parser("evals", help="Evaluate Ask Data on known tasks.")
     eval_commands = evals_parser.add_subparsers(dest="eval_command", required=True)
@@ -108,7 +137,11 @@ def main() -> None:
         return
 
     if args.command == "ask":
-        asyncio.run(ask(" ".join(args.question)))
+        asyncio.run(ask(" ".join(args.question), session_id=args.session))
+        return
+
+    if args.command == "chat":
+        asyncio.run(chat(args.session))
         return
 
     parser.print_help()

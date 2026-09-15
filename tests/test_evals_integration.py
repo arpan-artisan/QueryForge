@@ -41,9 +41,9 @@ def test_full_reference_suite_uses_postgres_and_preserves_content():
     assert report["exit_code"] == 0, [
         (trial["case_id"], trial["grades"]) for trial in report["trials"] if not trial["passed"]
     ]
-    assert len(report["trials"]) == 30
-    assert report["summary"]["categories"]["analytics"]["passed"] == 18
-    assert len({trial["result"]["trace_id"] for trial in report["trials"]}) == 30
+    assert len(report["trials"]) == 35
+    assert report["summary"]["categories"]["analytics"]["passed"] == 20
+    assert len({trial["result"]["trace_id"] for trial in report["trials"]}) == 35
     assert database_content_digest(DEFAULT_DATABASE_QUERY_URL) == before
 
 

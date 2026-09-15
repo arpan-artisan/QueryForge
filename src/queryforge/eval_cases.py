@@ -18,6 +18,13 @@ DEFAULT_SUITE = Path(__file__).resolve().parents[2] / "evals" / "ask-data" / "ca
 type Cell = str | int | float | bool | None
 
 
+class EvalPriorTurn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    question: str = Field(min_length=1)
+    reference_sql: str = Field(min_length=1)
+
+
 class EvalCase(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
 
@@ -32,6 +39,7 @@ class EvalCase(BaseModel):
     repair_sql: str | None = None
     expected_repair_attempts: int = Field(default=0, ge=0, le=1)
     expected_rows: list[list[Cell]] | None = Field(default=None, max_length=100)
+    prior_turns: list[EvalPriorTurn] = Field(default_factory=list, max_length=5)
     ordered: bool = False
     tolerance: float = Field(default=0.005, ge=0, le=0.01)
 
@@ -67,6 +75,7 @@ class EvalCase(BaseModel):
             or self.repair_sql is not None
             or self.expected_repair_attempts
             or self.expected_rows is not None
+            or self.prior_turns
         ):
             raise ValueError("Local policy cases must not have reference SQL or rows")
         return self
@@ -74,12 +83,13 @@ class EvalCase(BaseModel):
     def scripted_sql_outputs(self) -> list[str] | None:
         if self.expected_status != "ok":
             return None
+        outputs = [turn.reference_sql for turn in self.prior_turns]
         if self.initial_sql is not None:
-            outputs = [self.initial_sql]
+            outputs.append(self.initial_sql)
             if self.repair_sql is not None:
                 outputs.append(self.repair_sql)
             return outputs
-        return [self.reference_sql or ""]
+        return [*outputs, self.reference_sql or ""]
 
 
 class EvalSuite(BaseModel):
@@ -238,6 +248,16 @@ def grade_result(
             diagnostics = diagnostics and "sql_repair_eligibility" in observed
         else:
             diagnostics = diagnostics and not repair_steps
+        if case.prior_turns:
+            memory_reads = [step for step in trace.steps if step.name == "memory_read"]
+            memory_writes = [step for step in trace.steps if step.name == "memory_write"]
+            diagnostics = (
+                diagnostics
+                and bool(memory_reads)
+                and bool(memory_writes)
+                and memory_reads[-1].metadata.get("used_turn_count", 0) >= len(case.prior_turns)
+                and memory_writes[-1].metadata.get("turn_written") is True
+            )
     grades = {
         "status": Grade(
             passed=result.status == case.expected_status,
