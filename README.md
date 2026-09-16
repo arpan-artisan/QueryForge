@@ -229,8 +229,12 @@ Postgres must already be running and initialized. Evals never reset it. Reports
 are written to ignored `evaluation-results/<run-id>/report.json` and `report.md`.
 They contain actual answers, rows, generated SQL, local traces, per-dimension
 grades, repair-attempt evidence, failure categories, and reproducibility metadata.
-Reference scores test the harness; only live scores measure model capability. Live
-runs use provider quota. Exit codes: `0` all selected trials pass, `1` graded
+The deterministic v1 gate is the full reference suite:
+`uv run queryforge evals run --mode reference --split all`. Live runs are
+baseline evidence for the configured provider/model, not a substitute for the
+reference gate. If credentials, quota, network, or provider availability prevent
+a live run, record the unavailable reason in the verification notes and keep the
+reference gate unchanged. Exit codes: `0` all selected trials pass, `1` graded
 failures, `2` invalid setup/environment or report failure.
 
 See `docs/evaluations.md` for task authoring, grading rules, limitations, and
@@ -259,19 +263,23 @@ The intended staged path is:
 The latest archived implementation changes are:
 
 ```text
-openspec/changes/archive/2026-09-08-add-ask-data-evals-v1
-openspec/changes/archive/2026-09-08-allow-safe-postgres-casts-v1
+openspec/changes/archive/2026-09-12-add-sql-repair-loop-v1
+openspec/changes/archive/2026-09-12-stabilize-ask-data-workflow-architecture-v1
+openspec/changes/archive/2026-09-12-simplify-ask-data-architecture-v1
+openspec/changes/archive/2026-09-15-add-conversation-memory-v1
 ```
 
-Their scope is a small reference/live evaluation harness, clear benchmark tasks,
-deterministic graders, inspectable reports, tests, CI, and documentation.
-The follow-up cast change fixes the date-cast failure discovered by live evals
-and preserves the same SQL policy and executor boundaries.
+Their scope is the repair loop, stabilized Ask Data workflow architecture,
+architecture simplification, and process-local conversation memory. Earlier
+archives added the v0 CLI, guardrails, observability, deterministic demo
+database, eval harness, and safe Postgres casts.
 
 ## Test
 
 ```bash
 uv run pytest
 uv run ruff check .
-openspec validate --all --strict
+openspec validate complete-ask-data-v1 --strict
+openspec validate --specs
+uv run queryforge evals run --mode reference --split all
 ```

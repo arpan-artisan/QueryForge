@@ -4,7 +4,7 @@ import json
 import pytest
 
 from queryforge import cli
-from queryforge.llm import LLMNotConfiguredError
+from queryforge.llm import LLMNotConfiguredError, LLMProviderError
 from queryforge.memory import InMemorySessionStore
 from queryforge.models import ApprovedQuery, QueryResult
 from queryforge.observability import NoOpTraceExporter, ObservabilityConfig
@@ -22,6 +22,14 @@ class StubLLM:
     async def generate_sql(self, question: str, schema_context: str) -> str:
         self.calls.append((question, schema_context))
         return self.sql
+
+
+class FailingLLM:
+    provider_name = "stub"
+    model_name = "cli-test"
+
+    async def generate_sql(self, question: str, schema_context: str) -> str:
+        raise LLMProviderError("provider unavailable")
 
 
 class StubQueryTool:
@@ -199,6 +207,28 @@ def test_ask_command_reports_missing_provider_after_allowed_intent(monkeypatch, 
     assert payload["intent_policy_code"] == "allowed_aggregate"
     assert payload["policy_code"] == "llm_not_configured"
     assert _step(payload, "provider_resolution")["status"] == "error"
+    assert _step(payload, "query_execution")["status"] == "skipped"
+
+
+def test_ask_command_prints_provider_error_json_with_trace_id(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(cli, "create_llm_provider", lambda: FailingLLM())
+    monkeypatch.setattr(cli, "QueryExecutorTool", lambda: StubQueryTool())
+
+    asyncio.run(cli.ask("What is total revenue?"))
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "error"
+    assert payload["question"] == "What is total revenue?"
+    assert payload["trace_id"].startswith("qf_")
+    assert payload["trace"]["trace_id"] == payload["trace_id"]
+    assert payload["provider"] == "stub"
+    assert payload["model"] == "cli-test"
+    assert payload["policy_code"] == "llm_provider_error"
+    assert payload["policy_reason"] == "provider unavailable"
+    assert payload["sql"] is None
+    assert payload["rows"] == []
+    assert _step(payload, "llm_sql_generation")["status"] == "error"
+    assert _step(payload, "sql_validation")["status"] == "skipped"
     assert _step(payload, "query_execution")["status"] == "skipped"
 
 

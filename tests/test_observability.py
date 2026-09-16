@@ -13,6 +13,7 @@ from queryforge.models import (
 )
 from queryforge.observability import (
     DEFAULT_TRACE_PREVIEW_ROWS,
+    MAX_TRACE_STRING_CHARS,
     REDACTED,
     LangfuseTraceExporter,
     LocalTraceRecorder,
@@ -269,6 +270,14 @@ def test_redact_trace_payload_removes_secret_like_keys_and_values() -> None:
     assert "readonly-pass" not in encoded
     assert redacted["GROQ_API_KEY"] == REDACTED
     assert redacted["nested"]["normal"] == "visible"
+
+
+def test_redact_trace_payload_truncates_long_strings() -> None:
+    long_value = "x" * (MAX_TRACE_STRING_CHARS + 50)
+
+    redacted = redact_trace_payload({"message": long_value})
+
+    assert redacted["message"] == f"{'x' * MAX_TRACE_STRING_CHARS}...[truncated]"
 
 
 def test_build_bounded_row_preview_caps_large_result_sets() -> None:

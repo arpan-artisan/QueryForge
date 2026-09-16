@@ -22,6 +22,7 @@ from queryforge.models import (
 DEFAULT_LANGFUSE_BASE_URL = "https://cloud.langfuse.com"
 DEFAULT_TRACE_PREVIEW_ROWS = 5
 MAX_TRACE_PREVIEW_ROWS = 100
+MAX_TRACE_STRING_CHARS = 2000
 REDACTED = "[REDACTED]"
 
 SENSITIVE_KEY_PARTS = (
@@ -391,11 +392,13 @@ def redact_trace_payload(value: Any, extra_secret_values: set[str] | None = None
     if isinstance(value, tuple):
         return [redact_trace_payload(child, extra_secret_values) for child in value]
 
-    if isinstance(value, str) and _looks_like_secret_value(value):
-        return REDACTED
-    if isinstance(value, str) and extra_secret_values:
-        for secret in sorted(extra_secret_values, key=len, reverse=True):
-            value = value.replace(secret, REDACTED)
+    if isinstance(value, str):
+        if _looks_like_secret_value(value):
+            return REDACTED
+        if extra_secret_values:
+            for secret in sorted(extra_secret_values, key=len, reverse=True):
+                value = value.replace(secret, REDACTED)
+        return _truncate_trace_string(value)
 
     return value
 
@@ -431,6 +434,12 @@ def _duration_ms(started_at: datetime, finished_at: datetime) -> float:
 def _redact_error_message(message: str) -> str:
     redacted = redact_trace_payload({"message": message})["message"]
     return redacted if isinstance(redacted, str) else REDACTED
+
+
+def _truncate_trace_string(value: str) -> str:
+    if len(value) <= MAX_TRACE_STRING_CHARS:
+        return value
+    return f"{value[:MAX_TRACE_STRING_CHARS]}...[truncated]"
 
 
 def _event_level(status: str | None) -> LangfuseEventLevel:

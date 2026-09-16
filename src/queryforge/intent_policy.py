@@ -26,6 +26,13 @@ ANALYTICAL_METRIC_TERMS = (
     "payment success rate",
     "successful payments",
     "failed payments",
+    "money",
+    "income",
+    "earnings",
+    "amount",
+    "sold",
+    "selling",
+    "quantity sold",
     "percentage",
     "percent",
     "succeeded",
@@ -84,6 +91,12 @@ DIMENSION_TERMS = (
     "by day",
     "by week",
     "by month",
+    "across products",
+    "across categories",
+    "across customers",
+    "across statuses",
+    "across channels",
+    "across payment methods",
     "per product",
     "per category",
     "per customer",
@@ -106,8 +119,11 @@ TREND_TERMS = (
     "daily",
     "weekly",
     "monthly",
+    "each day",
+    "each week",
+    "each month",
 )
-RANKING_TERMS = ("top", "highest", "lowest", "best", "worst", "rank", "ranking")
+RANKING_TERMS = ("top", "highest", "lowest", "best", "worst", "most", "least", "rank", "ranking")
 COMPARISON_TERMS = ("compare", "comparison", " versus ", " vs ", "against")
 FOLLOW_UP_TERMS = (
     "that",
@@ -143,6 +159,11 @@ UNAVAILABLE_DATA_TERMS = (
     "campaign",
     "ad spend",
     "traffic",
+    "lead",
+    "leads",
+    "trial",
+    "trials",
+    "conversion",
     "profit",
     "margin",
     "churn",
@@ -185,6 +206,7 @@ BYPASS_PATTERNS = (
     r"\bignore\s+(the\s+|all\s+)?(policy|rules|guardrails|validation|safety)\b",
     r"\bbypass\s+(the\s+|all\s+)?(policy|rules|guardrails|validation|safety)\b",
     r"\bskip\s+(the\s+|all\s+)?(policy|rules|guardrails|validation|safety)\b",
+    r"\bpretend\s+(the\s+)?(policy|rules|guardrails|validation|safety)\s+(passed|allowed|approved)\b",
     r"\breveal\s+(the\s+)?(system prompt|prompt|credentials|api key|secrets?)\b",
     r"\bshow\s+(the\s+)?(system prompt|prompt|credentials|api key|secrets?)\b",
     r"\bhide\s+(this|the)\s+(request|intent|query|sql)\b",
@@ -206,6 +228,8 @@ DESTRUCTIVE_PATTERNS = (
     r"\bexecute\s+(function|procedure|sql|statement)\b",
     r"\bimport\s+(data|rows?|records?|csv|file)\b",
     r"\bcopy\b.*\b(file|csv|database|table|orders?|customers?|products?|payments?|refunds?)\b",
+    r"\b(export|write|save)\b.*\b(csv|file|spreadsheet)\b",
+    r"\b(save|persist|store)\b.*\b(table|database|data|query|results?)\b",
     r"\bexport\s+(database|table|all|records?|rows?|data)\b",
     r"\bmutate\s+(data|database|rows?|records?)\b",
     r"\bmodify\s+(data|database|rows?|records?)\b",
@@ -217,7 +241,6 @@ SENSITIVE_PATTERNS = (
     r"\b(email|emails|email addresses).*\b(customer|customers)\b",
     r"\b(list|show|give|dump|get).*\b(email|emails|email addresses)\b",
     r"\b(password|passwords|password hash|credential|credentials|token|tokens|secret|secrets|api key|api keys)\b",
-    r"\b(system metadata|internal metadata)\b",
     r"\b(raw|full|complete)\s+(customer|customers|user|users)\b",
     r"\bdump\s+(customer|customers|user|users|personal data|pii)\b",
 )
@@ -226,6 +249,8 @@ ADMINISTRATIVE_PATTERNS = (
     r"\binformation_schema\b",
     r"\bpg_class\b",
     r"\bpg_tables\b",
+    r"\b(system metadata|internal metadata|database metadata)\b",
+    r"\binternal table definitions?\b",
     r"\bsystem catalog\b",
     r"\bsystem tables?\b",
     r"\blist\s+(tables|schemas|databases|roles|users|permissions|privileges)\b",
@@ -258,6 +283,7 @@ RESOURCE_ABUSE_PATTERNS = (
     r"\b(cartesian|cross)\s+join\b",
     r"\bmillions?\s+of\s+rows\b",
     r"\b100000\b",
+    r"\bnever\s+finish(es)?\b",
     r"\bexhaust\b",
     r"\bstress\s+test\b",
 )
@@ -607,6 +633,8 @@ def _has_known_filter_after_for(normalized: str) -> bool:
 
 def _has_multiple_safe_interpretations(normalized: str) -> bool:
     if not _contains_any(normalized, COMPARISON_TERMS):
+        return False
+    if sum(1 for term in KNOWN_FILTER_TERMS if _contains_term(normalized, term)) >= 2:
         return False
     if _contains_any(normalized, DIMENSION_TERMS) or _matches_any(normalized, (r"\bbetween\b", r"\bvs\b")):
         return False

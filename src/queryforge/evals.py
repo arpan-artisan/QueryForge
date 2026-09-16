@@ -71,6 +71,8 @@ class RecordingProvider:
             candidate = await self.provider.generate_sql(question, schema_context)
         except LLMProviderError as exc:
             self.error_category = "provider_error"
+            if isinstance(exc.__cause__, httpx.TimeoutException):
+                self.error_category = "provider_timeout"
             if (
                 isinstance(exc.__cause__, httpx.HTTPStatusError)
                 and exc.__cause__.response.status_code == 429
@@ -194,8 +196,9 @@ async def run_trial(
         )
         if result.status == "error":
             error = (
-                    tool.error_category
-                    or next((item.error_category for item in providers if item.error_category), None)
+                tool.error_category
+                or next((item.error_category for item in providers if item.error_category), None)
+                or _trace_failure_category(result)
                 or {
                     "llm_not_configured": "provider_configuration",
                     "llm_provider_error": "provider_error",
@@ -240,6 +243,25 @@ async def run_trial(
         "prior_turns": prior_results,
         "result": result.model_dump(mode="json") if result else None,
     }
+
+
+def _trace_failure_category(result) -> str | None:
+    if result.trace is None:
+        return None
+    for step in reversed(result.trace.steps):
+        if step.status != "error":
+            continue
+        category = step.metadata.get("error_category") or step.metadata.get("repair_category")
+        if category is None:
+            continue
+        if category == "unexpected_provider_error":
+            if step.metadata.get("exception_type", "").endswith("Timeout"):
+                return "provider_timeout"
+            return "unexpected_provider_error"
+        if category in {"llm_provider_error", "provider_unsupported"}:
+            return "provider_error"
+        return category
+    return None
 
 
 def summarize(trials: list[dict]) -> dict:

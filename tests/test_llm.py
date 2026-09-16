@@ -133,6 +133,70 @@ def test_groq_provider_raises_for_empty_sql() -> None:
         asyncio.run(provider.generate_sql("How many orders?", "orders(id integer)"))
 
 
+def test_groq_provider_normalizes_timeout() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("timed out", request=request)
+
+    provider = GroqLLMProvider(
+        api_key="test-key",
+        model_name="test-model",
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(LLMProviderError, match="timed out") as error:
+        asyncio.run(provider.generate_sql("How many orders?", "orders(id integer)"))
+
+    assert isinstance(error.value.__cause__, httpx.TimeoutException)
+
+
+def test_groq_provider_normalizes_network_failure() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    provider = GroqLLMProvider(
+        api_key="test-key",
+        model_name="test-model",
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(LLMProviderError, match="request failed") as error:
+        asyncio.run(provider.generate_sql("How many orders?", "orders(id integer)"))
+
+    assert isinstance(error.value.__cause__, httpx.RequestError)
+
+
+def test_groq_provider_normalizes_http_status() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, request=request, json={"error": "rate limited"})
+
+    provider = GroqLLMProvider(
+        api_key="test-key",
+        model_name="test-model",
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(LLMProviderError, match="HTTP 429") as error:
+        asyncio.run(provider.generate_sql("How many orders?", "orders(id integer)"))
+
+    assert isinstance(error.value.__cause__, httpx.HTTPStatusError)
+
+
+def test_groq_provider_normalizes_invalid_response() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, request=request, json={"choices": []})
+
+    provider = GroqLLMProvider(
+        api_key="test-key",
+        model_name="test-model",
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(LLMProviderError, match="invalid response") as error:
+        asyncio.run(provider.generate_sql("How many orders?", "orders(id integer)"))
+
+    assert isinstance(error.value.__cause__, IndexError)
+
+
 def test_groq_provider_raises_for_unsupported_marker() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"choices": [{"message": {"content": "UNSUPPORTED"}}]})

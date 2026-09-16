@@ -75,6 +75,17 @@ provider/model selected through the existing `.env` configuration and consume
 quota. Keep development runs small while investigating failures. No API keys
 belong in cases, source code, reports, or GitHub.
 
+For Ask Data v1, the required deterministic gate is:
+
+```bash
+uv run queryforge evals run --mode reference --split all
+```
+
+Live evals are provider/model baseline evidence. They can fail because of model
+behavior, credentials, quota, network, rate limits, or provider availability. If
+a live baseline cannot be run, record the concrete unavailable reason in the
+verification notes instead of weakening or replacing the reference gate.
+
 `--suite PATH` selects another validated JSON suite. `--case ID` is repeatable;
 IDs must belong to the selected split. Empty selections are errors. `--output-dir`
 defaults to the git-ignored `evaluation-results` directory. Custom output paths
@@ -196,15 +207,13 @@ uv run pytest tests/test_evals_integration.py
   permit 1-1024; timestamp precision permits 0-6. Other modifiers, custom types,
   arrays, catalog identifier types, and TRY_CAST remain blocked. Operands are
   still checked recursively; invalid data conversions return database errors.
-- With the installed SQLGlot, `AND` is still treated as an unapproved function.
-  `GROUP BY` a select alias is also outside the current scope resolver. Those
-  limitations are separate from casts and remain visible in live output.
 - Reference calibration passes a policy decision to the executor, exactly as
   the agent does. Its regression test verifies that normalization-inserted casts
   survive this second check; expected values and the original case set are unchanged.
-- A network timeout can currently escape the production graph without a final
-  trace. The harness retains it as a failed trial with observed call metadata;
-  it does not fabricate a completed trace. Fixing agent error handling is separate work.
+- Provider timeouts, network failures, HTTP status failures, invalid provider
+  responses, and unexpected provider exceptions now return structured terminal
+  results with trace identity. Eval reports keep them visible as provider failure
+  categories instead of removing them from scores.
 - External writers that change and restore data entirely between digest checks
   may evade drift detection. Use an isolated local/CI fixture with no writers.
 - No latency or model-cost acceptance threshold is set yet. Durations are

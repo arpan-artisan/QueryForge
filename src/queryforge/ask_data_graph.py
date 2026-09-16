@@ -378,6 +378,29 @@ class AskDataGraph:
                 "skip_steps": _downstream_steps("llm_sql_generation"),
                 "skip_reason": "llm_provider_error",
             }
+        except Exception as exc:  # noqa: BLE001 - provider failures must return traceable results.
+            reason = f"Unexpected provider failure: {exc}"
+            state["recorder"].record_step(
+                "llm_sql_generation",
+                "error",
+                metadata={
+                    "provider": llm.provider_name,
+                    "model": llm.model_name,
+                    "error_category": "unexpected_provider_error",
+                    "exception_type": type(exc).__name__,
+                },
+                error=reason,
+                started_at=started_at,
+                duration_ms=_elapsed_ms(started_perf),
+            )
+            return {
+                "status": "error",
+                "answer": f"LLM failed: {reason}",
+                "policy_code": "llm_provider_error",
+                "policy_reason": reason,
+                "skip_steps": _downstream_steps("llm_sql_generation"),
+                "skip_reason": "llm_provider_error",
+            }
 
         state["recorder"].record_step(
             "llm_sql_generation",
@@ -513,6 +536,32 @@ class AskDataGraph:
                 "repair_used": True,
                 "policy_code": "llm_provider_error",
                 "policy_reason": str(exc),
+            }
+        except Exception as exc:  # noqa: BLE001 - provider failures must return traceable results.
+            reason = f"Unexpected provider failure: {exc}"
+            state["recorder"].record_step(
+                "sql_repair_generation",
+                "error",
+                metadata=_repair_metadata(state, "unexpected_provider_error")
+                | {
+                    "provider": llm.provider_name,
+                    "model": llm.model_name,
+                    "exception_type": type(exc).__name__,
+                },
+                error=reason,
+                started_at=started_at,
+                duration_ms=_elapsed_ms(started_perf),
+            )
+            return _terminal_update(
+                status="error",
+                answer=f"LLM repair failed: {reason}",
+                failed_stage=state["repair_failure_source"],
+                skip_reason="repair_provider_error",
+                sql=state["repair_failed_sql"],
+            ) | {
+                "repair_used": True,
+                "policy_code": "llm_provider_error",
+                "policy_reason": reason,
             }
 
         attempts = [*state.get("attempts", []), candidate]

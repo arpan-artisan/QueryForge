@@ -5,8 +5,9 @@ This is the living diagram page for QueryForge. Update it whenever an OpenSpec c
 Current scope: local CLI Ask Data flow for a stabilized seven-table Postgres
 demo database with required memory read/write workflow boundaries, process-local
 session memory, LangGraph orchestration, one bounded SQL repair attempt, bounded
-local traces, optional Langfuse export, execution-time demo database readiness
-checks, and reference/live evaluation commands.
+local traces, structured provider failure handling, optional Langfuse export,
+execution-time demo database readiness checks, and reference/live evaluation
+commands.
 
 ## Demo Schema
 
@@ -152,7 +153,7 @@ flowchart TD
     generation_node --> generator["generate_sql_candidate(llm, request, context)"]
     generator --> llm_call["llm.generate_sql(question, context.schema_text)"]
     llm_call --> candidate["SQLCandidate(sql, provider, model, attempt)"]
-    llm_call -. provider unsupported or error .-> skip_generation["Record generation failure and skipped validation, approval, and DB work"]
+    llm_call -. provider unsupported, timeout, network, invalid response, or unexpected provider error .-> skip_generation["Record generation failure and skipped validation, approval, and DB work"]
 
     candidate --> validation_node["sql_validation node"]
     validation_node --> approver["approve_sql_candidate(candidate)"]
@@ -169,7 +170,7 @@ flowchart TD
     repair_generator --> repair_call["llm.generate_sql(repair prompt, context.schema_text)"]
     repair_call --> repair_candidate["SQLCandidate(sql, provider, model, attempt=2)"]
     repair_candidate --> validation_node
-    repair_call -. provider unsupported or error .-> skip_sql
+    repair_call -. provider unsupported, timeout, network, invalid response, or unexpected provider error .-> skip_sql
     sql_decision -- allowed --> approval_step["Record query_approval and create ApprovedQuery"]
     approval_step --> approved_query["ApprovedQuery(normalized_sql, policy decision)"]
     approved_query --> execution_node["query_execution node"]
@@ -605,7 +606,7 @@ flowchart TD
     status -- unsupported --> unsupported["User sees original question, trace_id, unsupported status, and intent, schema, or provider reason"]
     status -- clarification_required --> clarification["User sees original question, trace_id, and the missing metric, dimension, entity, time range, or scope"]
     status -- invalid --> invalid["User sees original question, trace_id, generated SQL, invalid status, parse reason, and skipped query execution"]
-    status -- error --> error["User sees original question, trace_id, provider, validation, readiness, timeout, database, or observability export failure reason"]
+    status -- error --> error["User sees original question, trace_id, provider, validation, readiness, timeout, database, memory, or observability export failure reason"]
 
     success --> next_question["Ask another question; same chat session can reuse bounded prior context"]
     blocked --> revise["Revise the question or inspect generated SQL when SQL exists"]
@@ -709,6 +710,7 @@ classDiagram
         +LLMProvider provider
         +int calls
         +list outputs
+        +str? error_category
         +generate_sql(question, schema_context) str
     }
     class RecordingExecutor {

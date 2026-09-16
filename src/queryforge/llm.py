@@ -79,21 +79,31 @@ class OpenAICompatibleLLMProvider:
             ],
         }
 
-        async with httpx.AsyncClient(
-            timeout=self.timeout_seconds,
-            transport=self.transport,
-        ) as client:
-            response = await client.post(
-                f"{self.base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {self.api_key}"},
-                json=payload,
-            )
-
         try:
+            async with httpx.AsyncClient(
+                timeout=self.timeout_seconds,
+                transport=self.transport,
+            ) as client:
+                response = await client.post(
+                    f"{self.base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                    json=payload,
+                )
             response.raise_for_status()
             data = response.json()
             content = data["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, TypeError, ValueError, httpx.HTTPError) as exc:
+        except httpx.TimeoutException as exc:
+            raise LLMProviderError(f"{self.provider_name} timed out while generating SQL.") from exc
+        except httpx.HTTPStatusError as exc:
+            status_code = exc.response.status_code
+            raise LLMProviderError(
+                f"{self.provider_name} returned HTTP {status_code} while generating SQL."
+            ) from exc
+        except httpx.RequestError as exc:
+            raise LLMProviderError(
+                f"{self.provider_name} request failed while generating SQL."
+            ) from exc
+        except (KeyError, IndexError, TypeError, ValueError) as exc:
             raise LLMProviderError(f"{self.provider_name} returned an invalid response.") from exc
 
         if not isinstance(content, str):
