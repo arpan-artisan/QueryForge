@@ -28,6 +28,7 @@ pytestmark = pytest.mark.skipif(
 
 
 def test_full_reference_suite_uses_postgres_and_preserves_content():
+    evaluation_suite, _ = load_suite()
     require_demo_database_ready(DEFAULT_DATABASE_QUERY_URL)
     before = database_content_digest(DEFAULT_DATABASE_QUERY_URL)
     report = asyncio.run(
@@ -41,9 +42,12 @@ def test_full_reference_suite_uses_postgres_and_preserves_content():
     assert report["exit_code"] == 0, [
         (trial["case_id"], trial["grades"]) for trial in report["trials"] if not trial["passed"]
     ]
-    assert len(report["trials"]) == 35
-    assert report["summary"]["categories"]["analytics"]["passed"] == 20
-    assert len({trial["result"]["trace_id"] for trial in report["trials"]}) == 35
+    expected_trials = len(evaluation_suite.cases) * report["trials_per_case"]
+    analytics_case_count = sum(1 for case in evaluation_suite.cases if case.category == "analytics")
+    expected_analytics = analytics_case_count * report["trials_per_case"]
+    assert len(report["trials"]) == expected_trials
+    assert report["summary"]["categories"]["analytics"]["passed"] == expected_analytics
+    assert len({trial["result"]["trace_id"] for trial in report["trials"]}) == expected_trials
     assert database_content_digest(DEFAULT_DATABASE_QUERY_URL) == before
 
 

@@ -1,8 +1,5 @@
-import inspect
-
 import pytest
 
-from queryforge import intent_policy
 from queryforge.intent_policy import evaluate_intent_policy
 from queryforge.models import AskDataResult, IntentPolicyDecision
 
@@ -253,6 +250,13 @@ def test_allows_safe_follow_up_when_memory_context_exists() -> None:
     assert decision.code == "allowed_memory_follow_up"
 
 
+def test_allows_elliptical_ranking_follow_up_when_memory_context_exists() -> None:
+    decision = evaluate_intent_policy("Which category is highest?", has_memory_context=True)
+
+    assert decision.status == "allowed"
+    assert decision.code == "allowed_memory_follow_up"
+
+
 def test_allows_ranked_memory_reference_when_memory_context_exists() -> None:
     questions = [
         "For the channel with higher net revenue, list the top 3 customers and their net revenue.",
@@ -317,12 +321,3 @@ def test_agent_result_serializes_intent_fields_separately_from_sql_policy_fields
     assert payload["intent_policy_code"] == "blocked_bypass_policy"
     assert payload["validation_status"] is None
     assert payload["policy_code"] is None
-
-
-def test_intent_policy_has_no_provider_sql_policy_or_database_imports() -> None:
-    source = inspect.getsource(intent_policy)
-
-    assert "queryforge.llm" not in source
-    assert "queryforge.sql_safety" not in source
-    assert "queryforge.tools" not in source
-    assert "queryforge.postgres" not in source

@@ -294,7 +294,9 @@ CLARIFICATION_BROAD_PATTERNS = (
 )
 
 
-def evaluate_intent_policy(question: str, *, has_memory_context: bool = False) -> IntentPolicyDecision:
+def evaluate_intent_policy(
+    question: str, *, has_memory_context: bool = False
+) -> IntentPolicyDecision:
     normalized = _normalize_question(question)
 
     if not normalized:
@@ -413,7 +415,9 @@ def _unsupported_decision(normalized: str) -> IntentPolicyDecision | None:
 
 
 def _clarification_decision(normalized: str) -> IntentPolicyDecision | None:
-    if _matches_any(normalized, CLARIFICATION_BROAD_PATTERNS) and not _is_bounded_lookup(normalized):
+    if _matches_any(normalized, CLARIFICATION_BROAD_PATTERNS) and not _is_bounded_lookup(
+        normalized
+    ):
         return _decision(
             "clarification_required",
             "clarification_required",
@@ -566,7 +570,11 @@ def _has_metric_or_business_count(normalized: str) -> bool:
 
 
 def _is_safe_memory_follow_up(normalized: str) -> bool:
-    if not _contains_any(normalized, FOLLOW_UP_TERMS):
+    has_reference = _contains_any(normalized, FOLLOW_UP_TERMS)
+    has_elliptical_ranking = _contains_any(normalized, RANKING_TERMS) and _contains_any(
+        normalized, BUSINESS_TERMS
+    )
+    if not has_reference and not has_elliptical_ranking:
         return False
     return (
         _contains_any(normalized, DIMENSION_TERMS + TREND_TERMS + RANKING_TERMS + COMPARISON_TERMS)
@@ -621,7 +629,9 @@ def _has_ambiguous_entity(normalized: str) -> bool:
         return False
     if _matches_any(
         normalized,
-        (r"\bfor\s+(customer|product|category|status|channel|payment method|order|payment|refund)\b",),
+        (
+            r"\bfor\s+(customer|product|category|status|channel|payment method|order|payment|refund)\b",
+        ),
     ):
         return False
     return _matches_any(normalized, (r"\bfor\s+[a-z][\w'-]*\b",))
@@ -636,6 +646,8 @@ def _has_multiple_safe_interpretations(normalized: str) -> bool:
         return False
     if sum(1 for term in KNOWN_FILTER_TERMS if _contains_term(normalized, term)) >= 2:
         return False
-    if _contains_any(normalized, DIMENSION_TERMS) or _matches_any(normalized, (r"\bbetween\b", r"\bvs\b")):
+    if _contains_any(normalized, DIMENSION_TERMS) or _matches_any(
+        normalized, (r"\bbetween\b", r"\bvs\b")
+    ):
         return False
     return _has_metric_or_business_count(normalized)

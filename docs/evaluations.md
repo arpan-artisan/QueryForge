@@ -9,13 +9,13 @@ and deterministic graders; no extra evaluation framework is needed.
 
 ## What We Measure
 
-`evals/ask-data/cases.json` contains 35 tasks, including 20 analytics tasks and
-15 local policy tasks. Development has 25 tasks; held-out has 10. Every split
+`evals/ask-data/cases.json` contains 36 tasks, including 21 analytics tasks and
+15 local policy tasks. Development has 26 tasks; held-out has 10. Every split
 contains analytics, blocked, unsupported, and clarification cases.
 
 Analytics include revenue definitions, refunds, payment success, average order
-value, rankings, categories, monthly totals, lookup, memory follow-up filters,
-empty results, and historical prices. Questions explicitly define which order
+value, rankings, categories, monthly totals, lookup, memory follow-up filters and
+elliptical rankings, empty results, and historical prices. Questions explicitly define which order
 statuses contribute, the desired fields, and ordering when relevant. Expected
 answers are manually specified from the seed and documented facts, rather than
 generated from the LLM being measured.
@@ -26,8 +26,8 @@ whether the system is refusing too much. Scripted malicious model responses
 invented tables, and unsafe repair attempts) additionally exercise downstream
 guardrails in pytest.
 
-The suite also includes same-session memory coverage without increasing the
-task count. A case can define `prior_turns`; the runner executes those turns in
+The suite includes same-session memory coverage through development cases. A case
+can define `prior_turns`; the runner executes those turns in
 the same fresh session before grading the final question. Existing clarification
 cases cover missing-memory behavior where a follow-up-like request has no usable
 prior context.
@@ -85,6 +85,13 @@ Live evals are provider/model baseline evidence. They can fail because of model
 behavior, credentials, quota, network, rate limits, or provider availability. If
 a live baseline cannot be run, record the concrete unavailable reason in the
 verification notes instead of weakening or replacing the reference gate.
+
+The `stabilize-ask-data-v1` review added `memory-elliptical-category-ranking`
+after a real chat rejected `Which category is highest?` despite usable
+same-session context. The case passed focused reference calibration and a
+bounded live Groq run after the intent-policy fix. The same review sampled four
+held-out IDs live; those IDs are recorded as exposed in the change verification
+record and are not untouched held-out evidence afterward.
 
 `--suite PATH` selects another validated JSON suite. `--case ID` is repeatable;
 IDs must belong to the selected split. Empty selections are errors. `--output-dir`
@@ -182,7 +189,7 @@ live mode: that is useful evidence for the next agent improvement.
 7. Promote confirmed failures to regression cases. When the suite saturates,
    retain it and add harder capabilities rather than replacing useful regressions.
 
-The feature author owns suite changes and transcript review. CI runs reference
+The change owner reviews suite changes and transcripts. CI runs reference
 calibration without credentials. For the additional full-DB pytest test:
 
 ```powershell
@@ -209,7 +216,7 @@ uv run pytest tests/test_evals_integration.py
   still checked recursively; invalid data conversions return database errors.
 - Reference calibration passes a policy decision to the executor, exactly as
   the agent does. Its regression test verifies that normalization-inserted casts
-  survive this second check; expected values and the original case set are unchanged.
+  survive this second check; that fix did not change existing expected values.
 - Provider timeouts, network failures, HTTP status failures, invalid provider
   responses, and unexpected provider exceptions now return structured terminal
   results with trace identity. Eval reports keep them visible as provider failure
@@ -218,5 +225,8 @@ uv run pytest tests/test_evals_integration.py
   may evade drift detection. Use an isolated local/CI fixture with no writers.
 - No latency or model-cost acceptance threshold is set yet. Durations are
   recorded, but the provider protocol does not expose token usage or pricing.
+- Same-session follow-up recognition is deterministic. It supports explicit
+  references and entity-plus-ranking ellipsis such as `Which category is
+  highest?`; broader conversational ellipsis may still require clarification.
 - A development pass is not approval for production, and scripted passes do
   not measure LLM understanding. Review live results before deciding the next change.

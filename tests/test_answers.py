@@ -1,6 +1,12 @@
 from queryforge.answers import render_rows_as_answer
 
 
+def test_render_rows_as_answer_reports_empty_success() -> None:
+    assert render_rows_as_answer("Show order 999", []) == (
+        "I ran the query successfully, but it returned no rows."
+    )
+
+
 def test_render_rows_as_answer_includes_multi_row_values() -> None:
     answer = render_rows_as_answer(
         "Top products by revenue",

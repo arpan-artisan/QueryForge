@@ -203,7 +203,7 @@ provider, model, validation status, SQL policy code, and SQL policy reason.
 
 ## Ask Data Evaluations
 
-The first eval suite has 35 commerce and policy questions: 25 development and
+The current eval suite has 36 commerce and policy questions: 26 development and
 10 held-out cases. Every successful analytics task has independently declared
 expected values and a reference query that is checked against Postgres before
 trials begin.
@@ -263,6 +263,7 @@ The intended staged path is:
 The latest archived implementation changes are:
 
 ```text
+openspec/changes/archive/2026-09-27-stabilize-ask-data-v1
 openspec/changes/archive/2026-09-12-add-sql-repair-loop-v1
 openspec/changes/archive/2026-09-12-stabilize-ask-data-workflow-architecture-v1
 openspec/changes/archive/2026-09-12-simplify-ask-data-architecture-v1

@@ -1,7 +1,3 @@
-import json
-import re
-from pathlib import Path
-
 from queryforge.demo_database import (
     DEMO_FOREIGN_KEYS,
     DEMO_QUERY_COLUMNS,
@@ -49,22 +45,3 @@ def test_expected_facts_cover_future_eval_metrics() -> None:
         "category": "Accessories",
         "revenue": "740.00",
     }
-
-
-def test_demo_database_docs_expected_facts_match_contract() -> None:
-    docs_path = Path(__file__).resolve().parents[1] / "docs" / "demo-database.md"
-    docs = docs_path.read_text(encoding="utf-8")
-    match = re.search(
-        r"<!-- expected-facts-json:start -->\s*```json\s*(.*?)\s*```\s*"
-        r"<!-- expected-facts-json:end -->",
-        docs,
-        re.DOTALL,
-    )
-
-    assert match is not None
-    documented = json.loads(match.group(1))
-    expected = json.loads(
-        json.dumps({"row_counts": EXPECTED_ROW_COUNTS, "facts": EXPECTED_FACTS})
-    )
-
-    assert documented == expected

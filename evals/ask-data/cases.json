@@ -1,5 +1,5 @@
 {
-  "version": "ask-data-v1.1",
+  "version": "ask-data-v1.2",
   "dataset_version": "queryforge-commerce-v1",
   "dataset_fingerprint": "1b4911260c79d7ffa835a9c34c07c71fcbda93389cba0cea110f4f11d5a930b6",
   "cases": [
@@ -149,6 +149,29 @@
         ]
       ],
       "ordered": false,
+      "tolerance": 0.005
+    },
+    {
+      "id": "memory-elliptical-category-ranking",
+      "split": "dev",
+      "category": "analytics",
+      "question": "Which category is highest?",
+      "rationale": "An elliptical ranking follow-up should reuse the metric from the previous same-session analysis.",
+      "expected_status": "ok",
+      "prior_turns": [
+        {
+          "question": "Show completed order revenue by category.",
+          "reference_sql": "SELECT c.name AS category, SUM(oi.quantity * oi.unit_price) AS completed_revenue FROM orders o JOIN order_items oi ON oi.order_id = o.id JOIN products p ON p.id = oi.product_id JOIN categories c ON c.id = p.category_id WHERE o.status = 'completed' GROUP BY c.name ORDER BY completed_revenue DESC"
+        }
+      ],
+      "reference_sql": "SELECT c.name AS category, SUM(oi.quantity * oi.unit_price) AS completed_revenue FROM orders o JOIN order_items oi ON oi.order_id = o.id JOIN products p ON p.id = oi.product_id JOIN categories c ON c.id = p.category_id WHERE o.status = 'completed' GROUP BY c.name ORDER BY completed_revenue DESC LIMIT 1",
+      "expected_rows": [
+        [
+          "Accessories",
+          740
+        ]
+      ],
+      "ordered": true,
       "tolerance": 0.005
     },
     {
