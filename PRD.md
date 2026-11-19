@@ -1,33 +1,37 @@
 # QueryForge Product Requirements Document
 
-**Version:** 0.1  
-**Status:** Product direction source of truth  
-**Date:** 2026-08-22  
-**Current stage:** Local CLI-first NL2SQL prototype  
+**Version:** 0.2
+**Status:** Product direction source of truth
+**Date:** 2026-09-28
+**Current stage:** Stabilized local Ask Data v1; database-adapter design is next
 
 ## 1. Product Summary
 
-QueryForge is a provider-agnostic data-agent framework for asking questions of databases and, later, creating governed analytics dashboards.
+QueryForge is a provider-agnostic data assistant for asking questions of databases and, later, creating governed analytics dashboards.
 
 The product has two primary tools:
 
-1. **Ask Data**: a natural-language-to-SQL tool that turns a user's data question into a safe, validated, SQL-backed answer.
-2. **Analytics & Dashboard**: a later-stage tool that turns natural-language analysis requests into structured dashboard artifacts, charts, tables, and metric views.
+1. **Ask Data** turns a natural-language data question into a safe, validated, SQL-backed answer.
+2. **Analytics & Dashboard** will turn natural-language analysis requests into structured dashboards, charts, tables, and metric views.
 
 Both tools must share the same foundation for LLM access, database access, schema context, SQL validation, query execution, memory, traces, evals, and governance.
 
-The first implementation target is intentionally small:
+The stabilized Ask Data v1 flow is:
 
 ```text
-user question
-  -> LLM provider
-  -> candidate SQL
-  -> QueryForge validation
-  -> Postgres query execution
-  -> rows, SQL, and status shown in the CLI
+question
+  -> AskDataRuntime and LangGraph workflow
+  -> session memory read
+  -> deterministic intent policy
+  -> schema context
+  -> provider-generated SQL candidate
+  -> SQL validation and approval
+  -> optional one-shot repair
+  -> read-only Postgres execution
+  -> answer, memory write, trace, and structured result
 ```
 
-QueryForge's core rule is:
+QueryForge's core rule remains:
 
 ```text
 LLMs suggest. QueryForge validates and decides.
@@ -39,19 +43,19 @@ Generated SQL, retrieved examples, memory, and model responses are never trusted
 
 Teams often need answers from operational or analytical databases, but getting those answers requires SQL skill, database knowledge, and time from engineers or analysts.
 
-Basic NL2SQL tools are attractive because they make data access conversational, but they commonly fail in ways that make users lose trust:
+Basic NL2SQL tools commonly fail in ways that make users lose trust:
 
 - hallucinated tables, columns, joins, or filters
 - unsafe generated SQL
 - unclear business definitions
 - wrong aggregation grain
 - poor visibility into what ran
-- no test set to measure correctness
-- no memory of user corrections
+- no benchmark for measuring correctness
+- no continuity across related questions
 - model-provider lock-in
 - dashboard generation that bypasses query safeguards
 
-QueryForge should solve this incrementally. The first goal is not to build a full BI platform. The first goal is to build a small, inspectable Ask Data loop and then harden it stage by stage.
+QueryForge addresses these risks incrementally. Ask Data v1 establishes a small, inspectable, measured workflow. Future work should strengthen that workflow before broadening it into a multi-database assistant and dashboard product.
 
 ## 3. Target Users
 
@@ -59,9 +63,9 @@ QueryForge should solve this incrementally. The first goal is not to build a ful
 
 - Developers building AI data tools.
 - Data-aware analysts who can inspect SQL and validate results.
-- Technical founders or builders who want a local prototype for database question answering.
+- Technical founders or builders who want a local database question-answering workflow.
 
-Early product decisions favor inspectability over hiding complexity. Showing generated SQL, errors, validation outcomes, and execution status is a feature, not noise.
+Early product decisions favor inspectability over hiding complexity. Showing the question, generated SQL, policy and validation outcomes, rows, answer, trace ID, and failure reason is a feature.
 
 ### Later Users
 
@@ -69,64 +73,66 @@ Early product decisions favor inspectability over hiding complexity. Showing gen
 - Teams that want generated dashboards over governed metrics.
 - Organizations that need policy, approval, and audit workflows around AI-generated database access.
 
-These later users require stronger guardrails, observability, evals, memory, metadata, and governance before the product should optimize for them.
+These users require broader metadata, eval coverage, persistent state, governance, and a product UI before QueryForge should be presented as production-ready.
 
 ## 4. Product Principles
 
-1. **Safety is outside the LLM.** Prompts can guide the model, but QueryForge policy decides what can execute.
-2. **Provider agnostic by default.** Groq can be the first connector, but the agent must not be hardcoded to Groq.
-3. **Postgres first, adapters later.** Prove the workflow with one database before designing a broad adapter contract.
-4. **CLI first, website later.** Build the core loop in a small interface before investing in UI.
-5. **Inspectability first.** The user should be able to see generated SQL, validation results, execution results, and errors.
-6. **Memory is context, not permission.** Memory may help the agent remember preferences or examples, but it cannot bypass validation.
-7. **Dashboards use governed retrieval.** A dashboard tool must not become a separate path for executing arbitrary raw SQL.
-8. **Reliability must be measured.** Claims of correctness should eventually be backed by evals, not vibes.
+1. **Safety is outside the LLM.** Prompts guide generation; QueryForge policy decides what can execute.
+2. **Provider agnostic by default.** Groq is the first connector, not a hardcoded dependency of the workflow.
+3. **Postgres first, adapters next.** Preserve the proven Postgres path while deriving the smallest useful database boundary from real coupling.
+4. **CLI first, website later.** The CLI remains the testable interface until the core workflow is ready for product UI work.
+5. **Inspectability first.** Users and developers can inspect the request, decisions, SQL, results, failures, and trace.
+6. **Memory is context, not permission.** Memory may improve continuity but cannot bypass validation or execution policy.
+7. **Dashboards use governed retrieval.** Dashboard generation must reuse approved query and metric paths.
+8. **Reliability is measured.** Claims of correctness require repeatable eval evidence, including safety negatives and result checks.
+9. **Contracts stay minimal.** Add interfaces only around proven variation or trust boundaries, following SOLID principles without speculative scaffolding.
 
 ## 5. Product Tools
 
-## 5.1 Ask Data
+### 5.1 Ask Data
 
-Ask Data is the first QueryForge tool. It lets a user ask a natural-language data question and receive:
+Ask Data lets a user ask a natural-language data question and receive:
 
+- the original question
 - execution status
-- generated SQL when available
-- validation outcome
-- result rows when available
-- a concise answer or failure reason
+- intent-policy outcome and reason when blocked
+- generated SQL and validation outcome when available
+- result rows and a readable answer when available
+- trace ID and categorized failure details
 
-### Ask Data v0 Behavior
+#### Implemented Ask Data v1
 
-The first version should support:
+- local CLI `ask` and multi-turn `chat` commands
+- provider-agnostic LLM protocol with a Groq connector
+- LangGraph workflow behind the `AskDataRuntime` entry point
+- deterministic pre-LLM intent policy
+- schema-scoped SQL generation for the demo database
+- SQLGlot AST validation and explicit `ApprovedQuery` execution boundary
+- read-only Postgres execution with readiness checks, statement timeout, and row limits
+- one bounded SQL repair attempt for repairable generation or validation failures
+- process-local session memory for related turns
+- local structured traces with secret redaction and optional Langfuse export
+- deterministic tests plus a curated 36-case evaluation suite with development and held-out splits
+- inspectable structured results and stable failure categories
 
-- CLI command for asking a question
-- provider-agnostic LLM interface
-- Groq connector as the first hosted LLM provider
-- Postgres query execution
-- static schema context for the demo database
-- SELECT-only SQL validation
-- blocking destructive SQL
-- tests for the LLM abstraction, SQL validation, and agent flow
+Ask Data v1 is a stabilized development baseline, not a claim of general production reliability. Its current evidence covers the demo schema and curated evaluation cases.
 
-### Ask Data Later Behavior
+#### Deferred Ask Data Capabilities
 
-Later versions should add:
+- dynamic schema introspection and relevance-based metadata retrieval
+- persistent or cross-session memory
+- governed correction memory and approved examples
+- additional hosted LLM connectors such as OpenAI, Gemini, NVIDIA, and Claude
+- database adapters beyond Postgres
+- broader datasets, business domains, and reliability thresholds
+- richer clarification and parameter handling
+- governance, authentication, authorization, and deployment controls
 
-- better schema and metadata retrieval
-- SQL repair attempts
-- parameter handling
-- result summarization
-- traces for each run
-- eval harness
-- memory from approved examples and corrections
-- clarification when a question is ambiguous
-- database adapter contract
-- stronger resource and execution controls
+### 5.2 Analytics & Dashboard
 
-## 5.2 Analytics & Dashboard
+Analytics & Dashboard is the second QueryForge tool. It remains planned work.
 
-Analytics & Dashboard is the second QueryForge tool. It is not part of the first implementation slice.
-
-The long-term goal is to let a user ask for a dashboard or analysis, such as:
+The goal is to let a user request an analysis such as:
 
 ```text
 Create a sales dashboard showing revenue, refunds, top products, and monthly order trends.
@@ -135,279 +141,180 @@ Create a sales dashboard showing revenue, refunds, top products, and monthly ord
 The system should eventually produce a structured dashboard artifact containing:
 
 - dashboard title and layout
-- metric cards
-- charts
-- tables
-- filters
-- widget data dependencies
+- metric cards, charts, and tables
+- filters and widget data dependencies
 - trace and freshness information
 - warnings or failed widgets when data cannot be retrieved safely
 
-### Dashboard Rules
+Dashboard widgets must use validated queries, governed metrics, or approved retrieval tools. Dashboard work should begin only after metadata and governance requirements are defined over the shared Ask Data foundation.
 
-- Dashboard widgets must use validated queries, governed metrics, or approved retrieval tools.
-- The dashboard tool must reuse the same validation and execution path as Ask Data.
-- Unsafe widget SQL must be blocked or marked failed.
-- Natural-language dashboard modification should preserve validation, traceability, and metric consistency.
-- Dashboard implementation should wait until Ask Data, guardrails, traces, evals, and metadata are more reliable.
+## 6. Shared Data-Assistant Foundation
 
-## 6. Shared Data-Agent Foundation
+Ask Data and Analytics & Dashboard must use one shared foundation rather than separate execution stacks.
 
-Ask Data and Analytics & Dashboard must be built on a shared foundation instead of separate agent stacks.
-
-The foundation includes:
-
-| Area | Responsibility |
-| --- | --- |
-| LLM providers | Generate candidate SQL, plans, explanations, or dashboard specs through interchangeable connectors. |
-| Schema context | Provide the LLM with relevant database tables, columns, relationships, and business descriptions. |
-| SQL validation | Parse and classify generated SQL before execution. |
-| Execution policy | Decide whether a query is allowed to run. |
-| Query executor | Execute approved queries against a database and normalize results. |
-| Tracing | Record question, provider, generated SQL, validation result, execution result, errors, and timings. |
-| Evals | Measure whether generated SQL and answers are correct on known cases. |
-| Memory | Provide context from prior runs, corrections, preferences, and approved examples. |
-| Database adapters | Future extension point for databases beyond Postgres. |
-| Governance | Future approval, policy, audit, and role controls. |
+| Area | Responsibility | Current state |
+| --- | --- | --- |
+| LLM providers | Generate candidate SQL or later structured analysis artifacts through interchangeable connectors. | Groq implemented behind a provider protocol. |
+| Schema context | Supply relevant tables, columns, relationships, and business descriptions. | Static demo context implemented; dynamic metadata deferred. |
+| Intent policy | Reject destructive, irrelevant, or unsupported requests before model use. | Deterministic local policy implemented. |
+| SQL validation | Parse and classify generated SQL before execution. | SQLGlot AST policy implemented. |
+| Execution approval | Create an explicit trusted boundary after validation. | `ApprovedQuery` boundary implemented. |
+| Query execution | Run approved queries and normalize results. | Read-only Postgres implementation stabilized. |
+| Tracing | Record the end-to-end request, decisions, timings, results, and errors with redaction. | Local tracing and optional Langfuse export implemented. |
+| Evals | Measure generation, policy, safety, result, memory, and repair behavior on known cases. | Curated deterministic suite implemented; broader coverage deferred. |
+| Memory | Carry relevant conversational context without granting execution authority. | Process-local session memory implemented. |
+| Database adapters | Separate database-specific behavior after deriving a boundary from Postgres. | Design is next; no adapter contract yet. |
+| Governance | Add approvals, policy profiles, audit, identity, and controlled access. | Planned. |
 
 ### Trust Boundary
 
 ```text
-User input
-  -> context retrieval
+User input and memory
+  -> intent policy and context construction
   -> LLM candidate output
-  -> QueryForge validation and policy
-  -> approved execution
-  -> traced result
+  -> SQL validation and explicit approval
+  -> read-only execution
+  -> traced result and memory update
 ```
 
-The LLM provider, prompt, memory store, and retrieved examples are input sources. They are not safety boundaries.
+The LLM provider, prompt, memory store, retrieved examples, and generated SQL are input sources. Only QueryForge policy and approval can authorize execution.
 
 ## 7. Memory Requirements
 
-Memory is important, but it is not a v0 feature.
+Ask Data v1 requires process-local session memory for multi-turn CLI conversations. Memory reads occur before generation, memory writes occur after the final result, and both are visible in trace events.
 
-Future memory types:
+Current memory stores only the bounded context needed to interpret follow-up questions. It does not persist across application restarts.
 
-- session context
-- user preferences
-- schema notes
-- business definitions
-- approved query examples
-- user corrections
-- failed query patterns
+Deferred memory capabilities include:
 
-Memory may help with context selection and generation quality. It must not:
+- persistent cross-session conversations
+- user preferences and profiles
+- governed business definitions and schema notes
+- approved query examples and user corrections
+- retrieval over larger memory collections
 
-- approve a query
-- bypass SQL validation
-- bypass execution policy
-- override governance rules
-- treat a past correction as automatic truth
-
-Every query suggested from memory still goes through the active validation and execution path.
+Memory must never approve a query, bypass intent or SQL policy, override governance, or turn an earlier correction into automatic truth. Every memory-influenced query follows the active validation and execution path.
 
 ## 8. Roadmap
 
-### Stage 1: NL2SQL CLI v0
+### Stage 1: NL2SQL CLI - Complete
 
-Goal: get the smallest useful Ask Data loop working.
+The provider abstraction, Groq connector, demo Postgres database, schema context, approved-query execution path, CLI, and focused tests are implemented.
 
-Scope:
+### Stage 2: Guardrails - Complete
 
-- LLM provider abstraction
-- Groq connector
-- Postgres-backed query executor
-- basic schema context
-- SELECT-only validation
-- CLI `ask` command
-- local demo database
-- focused unit tests
+Deterministic intent policy, SQL AST validation, blocked statements and functions, read-only credentials, timeouts, row limits, and inspectable policy failures are implemented for the current scope.
 
-### Stage 2: Guardrails
+### Stage 3: Traces and Observability - Complete
 
-Goal: reduce unsafe or unsupported execution.
+End-to-end local traces, trace IDs, stage timings, provider metadata, categorized errors, memory events, repair events, and secret redaction are implemented. Langfuse export is optional.
 
-Scope:
+### Stage 4: Evals - Complete for v1
 
-- stronger SQL AST policy
-- blocked functions and statements
-- basic query risk classification
-- statement timeout
-- row limits
-- clearer unsupported-question handling
+A curated 36-case suite, development and held-out splits, deterministic graders, safety cases, reports, and CI-friendly commands are implemented. Coverage remains bounded to the current demo domain.
 
-### Stage 3: Traces and Observability
+### Stage 5: Memory - Partial
 
-Goal: make each run inspectable.
+Process-local session memory is implemented. Persistent conversations, approved examples, governed corrections, and larger-scale retrieval remain deferred.
 
-Scope:
+### Stage 6: Database Adapters - Next
 
-- trace IDs
-- generated SQL records
-- validation records
-- execution timing
-- provider metadata
-- error categories
-- redaction rules
+First, map direct Postgres coupling and design the smallest adapter boundary that preserves all current behavior. The design must account for dialect identity, schema discovery, SQL policy inputs, approved execution, readiness, and normalized results without introducing a broad plugin framework.
 
-### Stage 4: Evals
+MySQL is the likely second connector, but its implementation is deferred until the boundary is proven against the existing Postgres path.
 
-Goal: measure correctness.
+### Stage 7: Governance - Planned
 
-Scope:
+Define policy profiles, approvals, identity and access rules, audit behavior, and controlled data access without weakening the existing safety boundary.
 
-- small benchmark set
-- expected SQL or expected results
-- unsafe-query negative cases
-- regression reports
-- CI-friendly test command
+### Stage 8: Analytics & Dashboard - Planned
 
-### Stage 5: Memory
+Define structured dashboard artifacts, governed metrics, widget generation, safe data retrieval, preview and modification flows, and persisted dashboard versions.
 
-Goal: improve repeated use without weakening safety.
+### Stage 9: Website - Planned
 
-Scope:
+Expose Ask Data, dashboards, metrics, history, traces, settings, and connections through a product UI after their underlying contracts are stable.
 
-- session memory
-- approved examples
-- correction memory
-- memory retrieval
-- validation remains mandatory
+## 9. Current Non-Goals
 
-### Stage 6: Database Adapters
+The current product does not include:
 
-Goal: move beyond Postgres after the core flow is proven.
-
-Scope:
-
-- adapter interface
-- dialect identity
-- schema introspection contract
-- validation hooks
-- execution normalization
-- second database connector
-
-### Stage 7: Governance
-
-Goal: support controlled use in teams.
-
-Scope:
-
-- approvals
-- policy profiles
-- audit trail
-- role-aware execution
-- controlled data access
-
-### Stage 8: Analytics & Dashboard
-
-Goal: generate governed dashboard artifacts.
-
-Scope:
-
-- structured dashboard schema
-- widget generation
-- metric definitions
-- governed widget data retrieval
-- dashboard preview and modification
-- persisted dashboard versions
-
-### Stage 9: Website
-
-Goal: expose the product through a richer UI.
-
-Possible routes:
-
-- `/ask`
-- `/dashboards`
-- `/metrics`
-- `/history`
-- `/traces`
-- `/settings`
-- `/connections`
-
-## 9. v0 Non-Goals
-
-The first NL2SQL feature must not include:
-
-- frontend
-- public API
-- dashboard generation
-- persistent memory
-- full eval suite
-- multi-database support
-- LangGraph orchestration
-- governance workflows
-- authentication or multi-tenancy
-- production deployment
+- frontend or public API
+- dashboard generation or governed semantic metrics
+- persistent memory, embeddings, or vector retrieval
+- databases beyond Postgres
+- governance, approval, authentication, authorization, or multi-tenancy
+- production deployment guarantees
 - broad business-user UX
+- general-purpose accuracy claims beyond the tested demo schema and eval suite
 
-These are deferred to separate OpenSpec changes.
+These require separate OpenSpec changes.
 
 ## 10. Success Criteria
 
 ### Product Direction
 
 - Contributors can explain QueryForge as two tools over one shared foundation.
-- New feature ideas can be classified as Ask Data, Analytics & Dashboard, shared foundation, or out of scope.
-- The roadmap gives a clear order for future work.
+- New work can be classified as Ask Data, Analytics & Dashboard, shared foundation, or out of scope.
+- Completed, partial, next, and planned stages are distinguishable.
 
-### Ask Data v0
+### Ask Data v1 Baseline
 
-- A user can ask a supported question from the CLI.
-- The system uses an LLM provider through a provider-agnostic interface.
-- Generated SQL is validated before execution.
-- Destructive SQL is blocked.
-- The query executor runs only SQL that passes validation.
-- The CLI shows generated SQL, rows, and status.
-- Tests cover the first agent loop and validation behavior.
+- A user can ask supported questions through the CLI and continue related questions in a session.
+- LLM generation is accessed through a provider-agnostic contract.
+- Intent and SQL policies run outside the LLM.
+- Only explicitly approved, read-only queries reach Postgres.
+- The result exposes the question, decisions, SQL, rows or answer, trace ID, and failure reason.
+- One repair attempt can recover supported repairable failures without creating an unbounded loop.
+- Automated tests and evals cover the workflow, contracts, safety boundaries, execution, memory, repair, and representative result correctness.
 
-### Later Reliability
+### Remaining Reliability Goals
 
-- Each run can be traced.
-- Evals measure supported cases and safety negatives.
-- Memory improves generation without becoming execution authority.
-- Dashboard widgets use the governed retrieval path.
+- Adapter work preserves the Postgres baseline before adding another database.
+- Broader eval datasets quantify reliability outside the demo schema.
+- Persistent memory improves continuity without becoming execution authority.
+- Governance and dashboard tools reuse the approved retrieval path.
 
-## 11. Follow-Up Implementation Change
+## 11. Next OpenSpec Change
 
-The next OpenSpec implementation change should be:
+The next change should be:
 
 ```text
-build-nl2sql-cli-v0
+design-database-adapter-v1
 ```
 
 Intended scope:
 
-- LLM provider abstraction
-- Groq connector
-- Postgres query execution
-- basic schema context
-- SELECT-only validation
-- CLI `ask` command
-- tests
+- inventory where the current workflow depends directly on Postgres
+- define the minimum database responsibilities from proven behavior
+- preserve current Postgres safety, execution, readiness, and result semantics
+- identify how dialect, schema discovery, policy inputs, and normalized results cross the boundary
+- define migration and contract tests before implementation
 
-Explicitly deferred from that change:
+Explicitly deferred:
 
-- dashboards
-- persistent memory
-- advanced evals
-- website work
-- public API
-- multi-database support
-- governance workflows
-- LangGraph orchestration
+- MySQL implementation
+- a general plugin or connector framework
+- public API or website work
+- governance implementation
+- dashboard implementation
 
-## 12. Decisions And Research Backlog
+## 12. Decisions and Research Backlog
 
 ### Decisions
 
-- Demo schema should be spec-driven. The schema should be documented as a product and eval contract before it becomes the long-term local development default.
-- Hosted LLM providers after Groq should include OpenAI, Gemini, NVIDIA, and Claude.
+- Ask Data v1 is the stabilized baseline for future work.
+- Groq remains the first connector while the workflow stays provider-agnostic.
+- Postgres remains the reference database and demo environment.
+- The database boundary will be derived from current Postgres coupling before a second connector is built.
+- MySQL is the preferred second database unless adapter discovery reveals a stronger reason to use Oracle.
+- Dashboard work follows metadata and governance design rather than creating a separate raw-SQL path.
 
 ### Needs Exploration
 
-- Evals need a dedicated discovery pass. QueryForge should not claim Ask Data is reliable until the project defines what to measure, how many cases are enough, and what failure threshold is acceptable.
-- Dashboard metadata format needs brainstorming. The format should probably wait until Ask Data has stronger schema context, traces, and evals.
-- The second database adapter should be MySQL or Oracle. MySQL is likely easier for local development and CI; Oracle may be more valuable for enterprise-style validation.
+- What is the smallest database adapter boundary supported by the existing code?
+- Which schema metadata and semantic metric format should dashboard generation consume?
+- In what order should OpenAI, Gemini, NVIDIA, and Claude connectors be added?
+- What persistence and correction model should support cross-session memory?
+- What identity, approval, and access model is required for governance?
+- Which additional datasets, domains, and thresholds are required before broader reliability claims?

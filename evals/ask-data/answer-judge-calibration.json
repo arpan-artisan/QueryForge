@@ -1,0 +1,37 @@
+{
+  "version": "answer-judge-v2",
+  "cases": [
+    {
+      "id": "clear-complete-answer",
+      "question": "What is net revenue?",
+      "expected_status": "ok",
+      "reference_answer": "Net revenue is 1995 after subtracting refunds from gross revenue.",
+      "answer": "Net revenue is 1995 after subtracting refunds from gross revenue.",
+      "expected": {"directness": true, "completeness": true, "clarity": true}
+    },
+    {
+      "id": "indirect-incomplete-unclear-answer",
+      "question": "What is net revenue?",
+      "expected_status": "ok",
+      "reference_answer": "Net revenue is 1995 after subtracting refunds from gross revenue.",
+      "answer": "There are several considerations and the number is somewhere around the figures already discussed.",
+      "expected": {"directness": false, "completeness": false, "clarity": false}
+    },
+    {
+      "id": "direct-clear-incomplete-answer",
+      "question": "What is net revenue and how is it calculated?",
+      "expected_status": "ok",
+      "reference_answer": "Net revenue is 1995, calculated as gross revenue minus refunds.",
+      "answer": "Net revenue is 1995.",
+      "expected": {"directness": true, "completeness": false, "clarity": true}
+    },
+    {
+      "id": "complete-clear-indirect-answer",
+      "question": "What is net revenue and how is it calculated?",
+      "expected_status": "ok",
+      "reference_answer": "Net revenue is 1995, calculated as gross revenue minus refunds.",
+      "answer": "Before answering, it is worth noting that financial metrics can be reviewed in several ways depending on the business discussion. Net revenue is 1995, calculated as gross revenue minus refunds.",
+      "expected": {"directness": false, "completeness": true, "clarity": true}
+    }
+  ]
+}

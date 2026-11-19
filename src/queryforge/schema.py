@@ -1,4 +1,48 @@
-SCHEMA_CONTEXT = """
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True, slots=True)
+class MetricDefinition:
+    metric_id: str
+    display_name: str
+    definition: str
+
+
+REVENUE_METRIC_DEFINITIONS = (
+    MetricDefinition(
+        metric_id="completed_revenue",
+        display_name="Completed revenue",
+        definition=(
+            "SUM(order_items.quantity * order_items.unit_price) for orders where "
+            "orders.status = 'completed'."
+        ),
+    ),
+    MetricDefinition(
+        metric_id="gross_revenue",
+        display_name="Gross revenue",
+        definition=(
+            "SUM(order_items.quantity * order_items.unit_price) for orders where "
+            "orders.status IN ('completed', 'refunded')."
+        ),
+    ),
+    MetricDefinition(
+        metric_id="refund_amount",
+        display_name="Refund amount",
+        definition="SUM(refunds.amount).",
+    ),
+    MetricDefinition(
+        metric_id="net_revenue",
+        display_name="Net revenue",
+        definition="gross revenue minus refund amount.",
+    ),
+)
+
+_REVENUE_METRIC_CONTEXT = "\n".join(
+    f"- {metric.display_name} means {metric.definition}"
+    for metric in REVENUE_METRIC_DEFINITIONS
+)
+
+SCHEMA_CONTEXT = f"""
 You can query this PostgreSQL ecommerce demo schema.
 
 Schema: public
@@ -63,10 +107,7 @@ Relationships:
 - refunds.order_id -> orders.id
 
 Metric definitions:
-- Completed revenue means SUM(order_items.quantity * order_items.unit_price) for orders where orders.status = 'completed'.
-- Gross revenue means SUM(order_items.quantity * order_items.unit_price) for orders where orders.status IN ('completed', 'refunded').
-- Refund amount means SUM(refunds.amount).
-- Net revenue means gross revenue minus refund amount.
+{_REVENUE_METRIC_CONTEXT}
 - Completed order count means COUNT(*) from orders where orders.status = 'completed'.
 - Average order value means completed revenue divided by completed order count.
 - Refund rate means refund amount divided by gross revenue, expressed as a percentage.
@@ -74,6 +115,7 @@ Metric definitions:
 
 Rules:
 - Use order_items.unit_price for historical revenue, not products.unit_price.
+- Aggregate order_items revenue and refunds independently before combining them.
 - Use only the supplied tables and columns.
 - Do not use customer email or any raw personal data.
 - Return exactly one SELECT statement.

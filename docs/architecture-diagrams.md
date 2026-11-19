@@ -134,11 +134,11 @@ flowchart TD
     intent_node --> intent["evaluate_intent_policy(question)"]
     intent --> intent_decision{"IntentPolicyDecision.status"}
 
-    intent_decision -- blocked --> skip_intent["Record skipped context, provider, LLM, SQL validation, approval, query execution, and answer rendering"]
+    intent_decision -- blocked --> skip_intent["Record skipped context, provider, semantic resolution, LLM SQL generation, validation, approval, query execution, and answer rendering"]
     intent_decision -- unsupported --> skip_intent
     intent_decision -- clarification_required --> skip_intent
 
-    intent_decision -- allowed --> context_node["context_build node"]
+    intent_decision -- provisionally allowed --> context_node["context_build node"]
     context_node --> context_builder["build_query_context(request, memory_context)"]
     context_builder --> query_context["QueryContext(schema_text plus bounded memory context, examples)"]
 
@@ -147,11 +147,22 @@ flowchart TD
     provider_factory --> dotenv["load_dotenv()"]
     dotenv --> provider_config["Read provider, model, and GROQ_API_KEY"]
     provider_config --> llm["LLMProvider implementation"]
-    provider_factory -. missing provider config .-> skip_provider["Record provider error and skipped generation, validation, approval, and DB work"]
+    provider_factory -. missing provider config .-> skip_provider["Record provider error and skipped semantic resolution, SQL generation, validation, approval, and DB work"]
 
-    llm --> generation_node["llm_sql_generation node"]
-    generation_node --> generator["generate_sql_candidate(llm, request, context)"]
-    generator --> llm_call["llm.generate_sql(question, context.schema_text)"]
+    llm --> semantic_node["semantic_metric_resolution node"]
+    query_context --> semantic_node
+    semantic_node --> resolver["resolve_metric_for_request(llm, request, context)"]
+    resolver --> metric_call["llm.resolve_metric(question, schema context, governed catalog)"]
+    metric_call --> metric_candidate["MetricResolutionCandidate from untrusted JSON"]
+    metric_candidate --> metric_validator["parse_metric_resolution and validate catalog IDs plus status invariants"]
+    metric_validator --> metric_decision{"MetricResolutionDecision.status"}
+    metric_decision -- clarification_required --> skip_semantic["Return clarification_required; skip SQL generation, validation, approval, and DB work"]
+    metric_validator -. malformed, unknown, or contradictory .-> skip_semantic_error["Return traceable error; skip SQL generation and DB work"]
+    metric_call -. timeout, network, HTTP, or invalid transport response .-> skip_semantic_error
+
+    metric_decision -- resolved or not_applicable --> generation_node["llm_sql_generation node"]
+    generation_node --> generator["generate_sql_candidate(llm, request, context, validated resolution)"]
+    generator --> llm_call["llm.generate_sql(question, context plus exact resolved definition when applicable)"]
     llm_call --> candidate["SQLCandidate(sql, provider, model, attempt)"]
     llm_call -. provider unsupported, timeout, network, invalid response, or unexpected provider error .-> skip_generation["Record generation failure and skipped validation, approval, and DB work"]
 
@@ -166,8 +177,8 @@ flowchart TD
     sql_decision -- invalid --> repair_check
     repair_check -- non-repairable or repair used --> skip_sql["Record SQL policy failure and skipped approval/query execution"]
     repair_check -- repairable and unused --> repair_generation["sql_repair_generation node"]
-    repair_generation --> repair_generator["generate_repaired_sql_candidate(llm, request, context, failed SQL, failure source, failure reason)"]
-    repair_generator --> repair_call["llm.generate_sql(repair prompt, context.schema_text)"]
+    repair_generation --> repair_generator["generate_repaired_sql_candidate(llm, request, context, validated resolution, failed SQL, failure source, failure reason)"]
+    repair_generator --> repair_call["llm.generate_sql(repair prompt, context plus exact resolved definition when applicable)"]
     repair_call --> repair_candidate["SQLCandidate(sql, provider, model, attempt=2)"]
     repair_candidate --> validation_node
     repair_call -. provider unsupported, timeout, network, invalid response, or unexpected provider error .-> skip_sql
@@ -195,6 +206,8 @@ flowchart TD
 
     skip_intent --> final_node
     skip_provider --> final_node
+    skip_semantic --> final_node
+    skip_semantic_error --> final_node
     skip_generation --> final_node
     skip_sql --> final_node
     skip_execution --> final_node
@@ -226,6 +239,7 @@ classDiagram
         +evaluate_intent(state) dict
         +build_context(state) dict
         +resolve_provider(state) dict
+        +resolve_metric(state) dict
         +generate_sql(state) dict
         +validate_sql(state) dict
         +repair_sql(state) dict
@@ -245,6 +259,7 @@ classDiagram
         +ContextBuilder context_builder
         +QueryContext? context
         +LLMProvider? llm
+        +MetricResolutionDecision? metric_resolution
         +SQLCandidate? candidate
         +list attempts
         +ApprovedQuery? approved_query
@@ -332,8 +347,31 @@ classDiagram
     }
 
     class GenerationFunctions {
-        +generate_sql_candidate(llm, request, context) SQLCandidate
-        +generate_repaired_sql_candidate(llm, request, context, failed_sql, failure_source, failure_reason) SQLCandidate
+        +generate_sql_candidate(llm, request, context, metric_resolution) SQLCandidate
+        +generate_repaired_sql_candidate(llm, request, context, metric_resolution, failed_sql, failure_source, failure_reason) SQLCandidate
+    }
+
+    class SemanticResolutionFunctions {
+        +metric_catalog_context() str
+        +resolve_metric_for_request(llm, request, context) MetricResolutionDecision
+        +parse_metric_resolution(raw_candidate) MetricResolutionDecision
+        +resolved_metric_definition(decision) MetricDefinition?
+    }
+
+    class MetricResolutionCandidate {
+        +MetricResolutionStatus status
+        +list candidate_metric_ids
+        +str? resolved_metric_id
+        +str reason
+        +str? clarification_question
+    }
+
+    class MetricResolutionDecision {
+        +MetricResolutionStatus status
+        +list candidate_metric_ids
+        +str? resolved_metric_id
+        +str reason
+        +str? clarification_question
     }
 
     class RepairFunctions {
@@ -373,6 +411,7 @@ classDiagram
         <<Protocol>>
         +str provider_name
         +str model_name
+        +resolve_metric(question, schema_context, metric_catalog) str
         +generate_sql(question, schema_context) str
     }
 
@@ -382,6 +421,7 @@ classDiagram
         +str api_key
         +str base_url
         +float timeout_seconds
+        +resolve_metric(question, schema_context, metric_catalog) str
         +generate_sql(question, schema_context) str
     }
 
@@ -530,8 +570,14 @@ classDiagram
     AskDataGraph --> MemoryStore
     AskDataGraph --> MemoryContext
     AskDataGraph --> ContextFunctions
+    AskDataGraph --> SemanticResolutionFunctions
     AskDataGraph --> GenerationFunctions
+    SemanticResolutionFunctions --> LLMProvider
+    SemanticResolutionFunctions --> MetricResolutionCandidate
+    SemanticResolutionFunctions --> MetricResolutionDecision
+    MetricResolutionCandidate <|-- MetricResolutionDecision
     GenerationFunctions --> LLMProvider
+    GenerationFunctions --> MetricResolutionDecision
     GenerationFunctions --> SQLCandidate
     AskDataGraph --> ApprovalFunctions
     AskDataGraph --> RepairFunctions
@@ -632,8 +678,21 @@ traces.
 
 ```mermaid
 flowchart TD
-    command["queryforge evals run"] --> load["load_suite and select_cases"]
-    load --> contract["require_demo_database_ready and pinned contract check"]
+    command["queryforge evals run"] --> baseline{"Approved live baseline?"}
+    baseline -- yes --> baseline_load["Load strict v2 baseline; pin suite, cases, trials, agent, judge, calibration, and dataset"]
+    baseline_load --> evidence_set{"Pinned evaluation set"}
+    baseline -- no --> evidence_set{"Evaluation set"}
+    evidence_set -- default development --> development["evals/ask-data/development.json"]
+    evidence_set -- explicit release --> release["evals/ask-data/release.json"]
+    development --> load["load_default_suites and select_cases"]
+    release --> load
+    load --> answer_contract["Validate human-reviewed answer expectations"]
+    answer_contract --> judge_choice{"Baseline loaded or --judge-answers?"}
+    judge_choice -- yes --> judge_calibration["Calibrate directness, completeness, and clarity judge"]
+    judge_choice -- no --> contract["require_demo_database_ready and pinned contract check"]
+    judge_calibration --> judge_compat{"Baseline judge and calibration identity match?"}
+    judge_compat -- yes or no baseline --> contract
+    judge_compat -. mismatch .-> invalid
     contract --> digest["database_content_digest of approved columns"]
     digest --> calibrate["Reference SQL approved by approve_sql_candidate"]
     calibrate --> reference_exec["Reference SQL through QueryExecutorTool as ApprovedQuery"]
@@ -657,17 +716,25 @@ flowchart TD
     repair_eval -- yes --> repair_path["Normal workflow records repair eligibility and repair generation"]
     repair_path --> policy
     repair_eval -- no --> result
-    result --> grades["grade_result: status, safety, results, diagnostics"]
-    grades --> unchanged["Check content digest after trial"]
+    result --> grades["grade_result: status, safety, results, diagnostics, answer grounding"]
+    grades --> semantic_choice{"Judge requested and deterministic grades pass?"}
+    semantic_choice -- yes --> semantic_grades["Judge directness, completeness, and clarity"]
+    semantic_choice -- no --> semantic_skip["Record not requested or skipped prerequisites"]
+    semantic_grades --> unchanged["Check content digest after trial"]
+    semantic_skip --> unchanged
     unchanged --> repeat{"More cases or trials?"}
     repeat -- yes --> fresh
     repeat -- no --> aggregate["summarize trials and categories"]
     contract -. not ready .-> invalid["Invalid run, setup error, no aggregate score"]
     reference_grade -. wrong reference .-> invalid
     unchanged -. content changed .-> invalid
-    aggregate --> report["write_report: redact JSON and Markdown"]
+    aggregate --> compare{"Baseline loaded?"}
+    compare -- yes --> baseline_gate["compare_live_baseline: hard safety, infrastructure, deterministic and subjective dimensions, category, and per-case floors"]
+    compare -- no --> raw_gate["All selected trials must pass"]
+    baseline_gate --> report["write_report: redact JSON and Markdown"]
+    raw_gate --> report
     invalid --> report
-    report --> exit_code["CLI exit 0 pass, 1 graded failure, 2 invalid run"]
+    report --> exit_code["CLI exit 0 gate pass, 1 completed regression, 2 invalid or incompatible run"]
 ```
 
 ## Evaluation Class Relationships
@@ -676,13 +743,13 @@ flowchart TD
 classDiagram
     class EvalSuite {
         +str version
+        +str purpose
         +str dataset_version
         +str dataset_fingerprint
         +list cases
     }
     class EvalCase {
         +str id
-        +str split
         +str question
         +str expected_status
         +list prior_turns
@@ -693,6 +760,11 @@ classDiagram
         +list expected_rows
         +bool ordered
         +float tolerance
+        +EvalPromotion? promoted_from_release
+    }
+    class EvalPromotion {
+        +str suite_version
+        +str case_digest
     }
     class EvalPriorTurn {
         +str question
@@ -701,6 +773,34 @@ classDiagram
     class Grade {
         +bool passed
         +str reason
+    }
+    class LiveEvalBaseline {
+        +int baseline_version
+        +str baseline_id
+        +str evaluation_set
+        +str suite_path
+        +str suite_version
+        +str suite_digest
+        +list selected_cases
+        +int trials_per_case
+        +str provider
+        +str model
+        +EvalBaselineAnswerJudge answer_judge
+        +EvalBaselineRates floors
+    }
+    class EvalBaselineAnswerJudge {
+        +str provider
+        +str model
+        +str calibration_version
+        +str calibration_digest
+    }
+    class EvalBaselineRates {
+        +float trials
+        +float tasks_passed_at_least_once
+        +float tasks_passed_every_trial
+        +dict dimensions
+        +dict categories
+        +dict cases
     }
     class ReferenceProvider {
         +list outputs
@@ -720,11 +820,13 @@ classDiagram
         +run(query) QueryResult
     }
     class EvaluationFunctions {
-        +run_evaluations(suite_path, mode, split, ids, trials) dict
+        +run_evaluations(suite_path, mode, evaluation_set, ids, trials, baseline_path, live_delay_seconds, judge_answers) dict
+        +compose_live_reports(report_paths, baseline_path) dict
         +run_trial(case, trial_number, provider_factory, executor) dict
         +approved_reference_query(sql) ApprovedQuery
         +database_content_digest(database_url) str
         +summarize(trials) dict
+        +compare_live_baseline(summary, trials, baseline) dict
         +write_report(report, output_dir) Path
     }
     class GraderFunctions {
@@ -732,13 +834,17 @@ classDiagram
         +grade_result(case, result, model_calls, executor_calls, executed_sql) dict
     }
     EvalSuite *-- EvalCase
+    EvalCase o-- EvalPromotion
     EvalCase *-- EvalPriorTurn
+    LiveEvalBaseline *-- EvalBaselineRates
+    LiveEvalBaseline *-- EvalBaselineAnswerJudge
     ReferenceProvider ..|> LLMProvider
     RecordingProvider ..|> LLMProvider
     RecordingProvider --> LLMProvider
     RecordingExecutor --> ApprovedQuery
     RecordingExecutor --> QueryExecutorTool
     EvaluationFunctions --> EvalSuite
+    EvaluationFunctions --> LiveEvalBaseline
     EvaluationFunctions --> AskDataRuntime
     EvaluationFunctions --> AgentRequest
     EvaluationFunctions --> ApprovedQuery
@@ -754,22 +860,33 @@ classDiagram
 
 ```mermaid
 flowchart TD
-    start["Start Postgres and run check-db"] --> choose{"What are you checking?"}
+    start["Start Postgres and run check-db"] --> evidence{"Which evidence set?"}
+    evidence -- routine development --> choose{"Reference or live?"}
+    evidence -- release assessment --> release["Add --evaluation-set release"]
+    release --> choose
     choose -- harness and regression --> reference["evals run --mode reference"]
     choose -- LLM capability --> key["Configure provider key in ignored .env"]
-    key --> live["evals run --mode live"]
+    key --> live_choice{"Ad hoc or approved baseline?"}
+    live_choice -- ad hoc --> live["evals run --mode live; optionally select a non-overlapping case chunk and pace trials"]
+    live_choice -- approved gate --> baseline_mode{"One run or staged chunks?"}
+    baseline_mode -- one run --> baseline_live["evals run --mode live --baseline ...; baseline owns selection and requires calibrated judging"]
+    baseline_mode -- staged --> chunks["Run every case exactly once across smaller judged chunks"]
+    chunks --> compose["evals compose --report ... --baseline ...; validate identity, coverage, trials, and infrastructure"]
     reference --> read["Open local report.md and report.json"]
     live --> read
+    baseline_live --> read
+    compose --> read
     read --> outcome{"Outcome"}
     outcome -- setup failure --> repair["Fix environment or invalid reference task"]
     repair --> start
     outcome -- graded failure --> inspect["Inspect question, SQL, values, grades, and trace"]
     inspect --> decide["Identify agent error, policy limitation, provider failure, or unfair grader"]
-    decide --> revise["Make the justified change and retain regression cases"]
-    revise --> choose
+    decide -- development case --> revise["Make the justified change and retain the regression"]
+    decide -- release case informed the change --> promote["Move it unchanged to development and add a release replacement"]
+    promote --> revise
+    revise --> evidence
     outcome -- passes --> sample["Manually review a sample of passing transcripts"]
-    sample --> heldout["Assess held-out cases after development changes"]
-    heldout --> repeat["Use repeated live trials to assess consistency"]
+    sample --> repeat["Use repeated live trials to assess consistency"]
 ```
 
 ## Maintenance Checklist

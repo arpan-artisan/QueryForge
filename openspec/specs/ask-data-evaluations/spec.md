@@ -7,19 +7,23 @@ Measure Ask Data outcomes on explicit, reproducible commerce tasks while disting
 ## Requirements
 
 ### Requirement: Versioned balanced evaluation tasks
-The evaluation suite SHALL retain a baseline of at least 35 uniquely identified tasks with at least 25 development and 10 held-out tasks, explicit expected statuses, rationale, and known results plus reference SQL for successful analytics. Both splits SHALL include allowed analytics and requests requiring refusal, unsupported responses, or clarification. Dataset loading MUST reject duplicate identifiers, unknown fields, invalid expectations, and empty selections. Suite changes SHALL update the suite version and documented counts; new stabilization regression cases SHALL enter the development split without removing existing useful coverage to maintain a fixed task count.
+QueryForge SHALL maintain separate versioned development and release evaluation suites. The development suite SHALL contain at least 25 uniquely identified regression tasks, and the release suite SHALL contain at least 10 uniquely identified assessment tasks that have not informed implementation changes. Each suite MUST declare its evidence purpose, dataset identity, and suite version; case identifiers MUST be unique across both active suites. Each suite SHALL include allowed analytics and requests requiring refusal, unsupported responses, or clarification, with explicit expected statuses, rationale, and known results plus reference SQL for successful analytics. Dataset loading MUST reject duplicate or cross-suite identifiers, unknown fields, purpose mismatches, invalid expectations, and empty selections. Suite changes SHALL update the affected suite version and documented counts; new stabilization regression cases SHALL enter the development suite without removing useful existing coverage.
 
 #### Scenario: A contributor adds a task
-- **WHEN** a task is loaded
-- **THEN** its question, expected behavior, comparison rules, and reference solution are validated before model work begins
+- **WHEN** a task is loaded into the development suite
+- **THEN** its question, expected behavior, comparison rules, reference solution, and development provenance are validated before model work begins
+
+#### Scenario: A release suite is loaded
+- **WHEN** a release assessment is selected
+- **THEN** the runner validates that the suite declares release purpose, contains at least 10 active release cases, and shares no active case identifier with the development suite before model work begins
 
 #### Scenario: Invalid suite
-- **WHEN** a suite contains duplicate identifiers or a successful case without reference results
+- **WHEN** a suite contains duplicate identifiers, an identifier active in both suites, a purpose mismatch, or a successful case without reference results
 - **THEN** the run fails as a setup error without calling the model
 
 #### Scenario: A regression expands the suite
 - **WHEN** a confirmed stabilization failure becomes a new evaluation case
-- **THEN** the development split grows, the suite version and documented counts are updated, and existing useful coverage and held-out separation are preserved
+- **THEN** the development suite grows, its version and documented count are updated, and the release suite is unchanged unless the case is being promoted from release evidence
 
 ### Requirement: Inspectable v1 stabilization evidence
 Ask Data v1 stabilization SHALL produce a reviewable evidence record identifying the evaluated source revision and local modifications, dataset and suite identity, verification commands, outcomes, and references to relevant redacted test, trace, or evaluation evidence. The record SHALL distinguish deterministic verification, actual live-provider evaluation, manual checks, and checks that failed or were not run. Existing reports and documentation SHALL be sufficient evidence sources; no separate reporting service is required.
@@ -128,11 +132,19 @@ The runner SHALL support bounded repeated trials and report per-category and per
 - **THEN** they can find each question, expected outcome, actual answer and rows, generated SQL, policy decisions, trace, grades, and failure category without secret configuration values
 
 ### Requirement: Regression gates and suite maintenance
-The CLI SHALL return exit code zero only when all selected trials pass, one for completed runs with failing grades, and two for setup or environment errors. Automated tests SHALL verify graders with deliberately incorrect outputs, adversarial provider responses, and real Postgres reference execution. Documentation SHALL explain live versus scripted evidence, human transcript review, held-out use, and promoting discovered failures into regression cases.
+For reference runs and live runs without a baseline, the CLI SHALL return exit code zero only when all selected trials pass, one for completed runs with failing grades, and two for setup or environment errors. For a baseline-backed live run, the CLI SHALL return zero only when the run is valid, every hard safety check passes, and all approved aggregate, per-dimension, and per-case floors are met; it SHALL return one for a completed quality regression and two for baseline, setup, or environment incompatibility. Automated tests SHALL verify graders and baseline comparisons with deliberately incorrect outputs, adversarial provider responses, incompatible identities, mixed repeated trials, and real Postgres reference execution. Documentation SHALL explain live versus scripted evidence, baseline approval and review, human transcript review, development versus release evaluation sets, and promoting discovered release failures into development regressions.
 
 #### Scenario: CI regression
 - **WHEN** any reference trial or safety check fails in CI
 - **THEN** the evaluation command fails the job without requiring an API key
+
+#### Scenario: Live baseline regression
+- **WHEN** a credentialed live regression run completes below any approved floor or violates the hard safety gate
+- **THEN** the command fails while retaining the report as reviewable regression evidence
+
+#### Scenario: Existing imperfection remains within the approved floor
+- **WHEN** a valid live run contains failed trials but satisfies every hard safety rule and every reviewed baseline floor
+- **THEN** the baseline-backed regression command succeeds while the failed trials remain visible in the report
 
 #### Scenario: Saturated suite
 - **WHEN** all current cases pass
@@ -177,7 +189,7 @@ The Ask Data evaluation suite SHALL include multi-turn cases that verify session
 - **THEN** diagnostic grading verifies bounded evidence of memory read and write behavior without requiring one exact internal node sequence
 
 ### Requirement: Ask Data v1 evaluation gate
-Ask Data v1 SHALL have an explicit evaluation gate that distinguishes required deterministic correctness from measured live-model capability. The v1 gate SHALL require the full selected reference suite and safety-negative coverage to pass before completion, while live runs SHALL produce a documented baseline rather than silently substituting for reference correctness.
+Ask Data v1 SHALL have an explicit evaluation gate that distinguishes required deterministic correctness from measured live-model capability. The v1 gate SHALL require the full selected reference suite and safety-negative coverage to pass before completion. An approved live regression gate SHALL additionally compare the configured live trial evidence against reviewed deterministic and calibrated answer-quality floors and MUST fail on hard-safety violations or infrastructure failures. A one-trial learning-project baseline MUST be described as breadth evidence and MUST NOT be represented as repeated-run stability evidence.
 
 #### Scenario: Reference gate passes
 - **WHEN** the v1 reference evaluation gate is run against the initialized deterministic demo database
@@ -188,9 +200,306 @@ Ask Data v1 SHALL have an explicit evaluation gate that distinguishes required d
 - **THEN** the v1 evaluation gate fails as setup or environment failure rather than reporting a valid capability score
 
 #### Scenario: Live baseline is recorded
-- **WHEN** live evaluation is run with the configured hosted provider
-- **THEN** the report records provider/model identity, selected split, pass/fail counts, failure categories, and enough transcript detail to review model capability without exposing secrets
+- **WHEN** live evaluation is run with the configured hosted provider and calibrated answer judge
+- **THEN** the report records agent and judge provider/model identity, calibration identity, selected split, pass/fail counts, deterministic and subjective dimension rates, failure categories, and enough transcript detail to review model capability without exposing secrets
+
+#### Scenario: Learning-project baseline uses one trial
+- **WHEN** the approved baseline configures one trial per case
+- **THEN** the gate covers every selected case while explicitly making no claim about repeated-run stability
+
+#### Scenario: Live baseline regression is checked
+- **WHEN** a compatible approved baseline is supplied to a live run
+- **THEN** the gate compares every approved deterministic and subjective floor, preserves per-case comparison, requires hard safety, rejects infrastructure failures, and exits unsuccessfully when any required condition fails
 
 #### Scenario: Live failure does not weaken safety
-- **WHEN** a live provider returns wrong SQL, unsafe SQL, no SQL, or times out
-- **THEN** the trial remains visible as a failed or infrastructure-classified trial and does not weaken the reference safety gate
+- **WHEN** a live provider or answer judge returns wrong, unsafe, unavailable, or malformed output
+- **THEN** the failure remains visible and cannot weaken or override deterministic safety and correctness requirements
+
+#### Scenario: Private reasoning is not requested
+- **WHEN** the gate evaluates answer or decision quality
+- **THEN** it grades only observable responses, rows, SQL, policy decisions, traces, and verdict evidence without requesting or storing private chain-of-thought
+
+### Requirement: Evidence sets are selected and reported separately
+The evaluation CLI SHALL select exactly one evidence set per run: `development` by default or `release` only when explicitly requested. It MUST NOT provide an `all` selection that combines development and release cases. A custom suite MUST declare the same evidence purpose as the requested set. Reports SHALL identify the evidence set, suite version and digest, ordered selected case identifiers, and evidence classification as either development regression or release assessment; a report MUST NOT aggregate the two evidence classes into one score.
+
+#### Scenario: Routine evaluation uses development evidence
+- **WHEN** a contributor runs an evaluation without choosing an evidence set
+- **THEN** only the development suite is selected and the report is labeled development-regression evidence
+
+#### Scenario: Release evaluation is deliberate
+- **WHEN** a contributor explicitly selects the release evidence set
+- **THEN** only the release suite is selected and the report is labeled release-assessment evidence
+
+#### Scenario: Combined selection is requested
+- **WHEN** a contributor supplies the removed `all` selection or otherwise attempts to combine both suites in one run
+- **THEN** the command fails with a controlled usage or setup error before calling the model or executor
+
+#### Scenario: Custom suite purpose conflicts
+- **WHEN** a custom suite declares development purpose but the command requests release evidence, or vice versa
+- **THEN** the run fails as a setup error and the report does not classify the suite as the requested evidence type
+
+### Requirement: Promoted release failures preserve an active release gate
+A release case whose question, transcript, expected result, or failure analysis informs an implementation change MUST cease to count as active release evidence. Promotion SHALL preserve the case identifier, question, oracle, and comparison rules in the development suite, record the originating release suite version, and remove the case from the active release suite. The same maintenance change MUST add a new independently reviewed release case and increment both affected suite versions so the release suite still contains at least 10 active cases before it can produce valid release evidence. Expected results or grading rules MUST NOT be weakened during promotion.
+
+#### Scenario: Release failure informs a fix
+- **WHEN** a maintainer uses a release case result to diagnose or implement a change
+- **THEN** that case is moved to the development suite with its release origin recorded and subsequent reports classify it only as development-regression evidence
+
+#### Scenario: Promotion has no replacement
+- **WHEN** a promoted case is removed from the release suite without adding an independently reviewed replacement and the active release count falls below 10
+- **THEN** release evaluation fails validation before calling the model or executor
+
+#### Scenario: Promotion changes the oracle
+- **WHEN** the promoted development case changes its expected result, comparison rules, or reference solution without a separately documented correction rationale
+- **THEN** suite validation or review rejects the promotion rather than treating the changed case as preserved regression evidence
+
+#### Scenario: Release case has not informed development
+- **WHEN** a release case is assessed but its contents and result are not used to guide an implementation change
+- **THEN** it MAY remain in the release suite and its report remains release-assessment evidence
+
+### Requirement: Routine and release gates remain operationally distinct
+Routine pull-request verification SHALL run the complete development reference suite without requiring hosted-model credentials. Release evaluation SHALL be a separate explicit action that uses the existing reference or live mode and existing graders. Passing development evidence MUST NOT be reported as passing release evidence, and this separation MUST NOT introduce new live-baseline thresholds or change grading semantics.
+
+#### Scenario: Pull-request evaluation runs
+- **WHEN** ordinary CI executes the evaluation gate
+- **THEN** it selects only the development reference suite and retains a development-labeled report artifact
+
+#### Scenario: Release evidence is required
+- **WHEN** a release reviewer requests a release assessment
+- **THEN** the reviewer runs the release suite explicitly and receives a separately labeled report using the selected existing evaluation mode
+
+#### Scenario: Development passes without release evidence
+- **WHEN** all development cases pass but no release suite has been run
+- **THEN** the evidence shows a passing development regression gate and does not claim a release assessment passed
+
+### Requirement: Explicit user-facing answer benchmarks
+Every evaluation case in both the purpose-declared development and release suites SHALL declare a human-reviewed reference answer describing the minimum useful response for that question. Successful analytics cases MUST additionally declare the accepted metric label or labels, the result values that must be communicated, and any metric-scope terms required to distinguish the intended definition. These expectations SHALL be evaluation oracles only and MUST NOT be supplied to the agent producing the answer.
+
+#### Scenario: Analytics answer benchmark is loaded
+- **WHEN** a successful analytics case is loaded
+- **THEN** the suite validates that its answer expectation identifies at least one accepted metric label, at least one required result value, and a nonempty reference answer
+
+#### Scenario: Successful query expects no rows
+- **WHEN** a successful analytics case has an empty expected row set
+- **THEN** its answer expectation explicitly requires an empty-result message and cannot invent a metric label or result value
+
+#### Scenario: Local outcome benchmark is loaded
+- **WHEN** a blocked, unsupported, or clarification case is loaded
+- **THEN** the suite validates a nonempty reference answer without requiring an analytical metric or result value
+
+#### Scenario: Development and release coverage is validated
+- **WHEN** the purpose-declared development and release suites are loaded
+- **THEN** every case in each evaluation set has a valid answer expectation and each affected suite retains its own purpose, version, and evidence identity
+
+#### Scenario: Agent runs without benchmark leakage
+- **WHEN** reference or live evaluation executes a case from either evaluation set
+- **THEN** the agent receives its normal question and runtime context but not the reference answer, accepted labels, required values, or subjective grading rubric
+
+### Requirement: Deterministic answer grounding
+Applicable trials SHALL receive an independent answer-grounding grade. For successful analytics, the grade MUST verify that the answer uses an accepted metric label, includes every case-declared required value and scope term, and does not introduce scalar claims unsupported by the returned rows or bounded result metadata. For non-analytical outcomes, the grade MUST reject claims that present a database result or value as though a query succeeded. Deterministic comparisons SHALL use declared numeric tolerance and bounded normalization rules that remain inspectable in the report.
+
+#### Scenario: Correct value is presented as the wrong metric
+- **WHEN** returned rows contain `2260` for gross revenue but the answer labels it as net revenue or only as ambiguous total revenue
+- **THEN** answer grounding fails even if result correctness passes
+
+#### Scenario: Answer invents an unsupported value
+- **WHEN** an answer contains a numerical, date, boolean, or null result claim that cannot be grounded in returned rows or permitted result metadata
+- **THEN** answer grounding fails and identifies the unsupported claim
+
+#### Scenario: Required result is omitted
+- **WHEN** a successful analytical answer omits a case-declared result value or required metric-scope term
+- **THEN** answer grounding fails and identifies the missing expectation
+
+#### Scenario: Local policy answer claims a result
+- **WHEN** a blocked, unsupported, or clarification result gives a data value as though an analytical query completed
+- **THEN** answer grounding fails even though the terminal status matches
+
+### Requirement: Calibrated semantic answer judgment
+When semantic answer grading is requested, the evaluator SHALL grade directness, completeness, and clarity separately through a provider-agnostic semantic judge. The judge MUST return a strictly validated structured verdict with one decision and bounded reason per dimension. Before trial verdicts are accepted, the judge MUST exactly reproduce the expected per-dimension decisions in a versioned calibration set containing clear passing and failing examples. The evaluator MUST NOT report a valid semantic quality score when the judge is unavailable, its response is malformed, or calibration fails.
+
+#### Scenario: Judge passes calibration
+- **WHEN** the configured judge matches every expected dimension in the selected calibration fixture
+- **THEN** its identity, calibration version and digest, and successful calibration result are recorded before trial answers are judged
+
+#### Scenario: Judge fails calibration
+- **WHEN** any calibration verdict is missing, malformed, or disagrees with an expected dimension
+- **THEN** the answer-quality evaluation is reported as invalid and no trial receives a semantic pass from that judge
+
+#### Scenario: Answer is grounded but unclear
+- **WHEN** deterministic grades pass but the calibrated judge finds the answer unclear while evaluating only directness, completeness, and clarity
+- **THEN** the clarity dimension and overall judged answer-quality grade fail with a bounded explanation
+
+#### Scenario: Semantic judge is not requested
+- **WHEN** the normal credential-free reference calibration runs without semantic answer grading
+- **THEN** deterministic answer-grounding evidence is produced and the report states that subjective prose quality was not measured
+
+### Requirement: Deterministic evidence remains authoritative
+Semantic judgment MUST NOT assess or override status, policy safety, SQL safety, returned-row correctness, metric/value grounding, or diagnostic consistency. A trial MUST pass a full answer-quality evaluation only when all existing applicable deterministic grades, deterministic answer grounding, and all requested semantic dimensions pass. Semantic judging SHALL be skipped for a trial whose deterministic prerequisites fail, and the report SHALL state the failed prerequisite rather than infer a semantic result.
+
+#### Scenario: Fluent answer contains the wrong result
+- **WHEN** a semantic judge would consider an answer direct, complete, and clear but deterministic result correctness or grounding fails
+- **THEN** the trial fails and no semantic verdict can change that outcome
+
+#### Scenario: Unsafe trial has polished prose
+- **WHEN** safety fails but the user-facing answer is well written
+- **THEN** the trial remains failed and semantic judging is recorded as not run because a deterministic prerequisite failed
+
+#### Scenario: All dimensions pass
+- **WHEN** status, safety, applicable result correctness, diagnostics, grounding, directness, completeness, and clarity all pass
+- **THEN** the trial passes the full answer-quality evaluation
+
+### Requirement: Inspectable answer-quality evidence
+Evaluation reports SHALL keep deterministic grounding and semantic judgments as separate dimensions. Reports MUST include the answer expectations used for grading, normalized grounded and unsupported claims, missing requirements, judge provider and model identity, calibration evidence, per-dimension verdicts, bounded reasons, and whether semantic grading was passed, failed, skipped, or unavailable. They MUST preserve the selected development or release evaluation set, evidence class, suite identity, and case provenance supplied by the evaluation-set boundary. Existing redaction rules SHALL apply to all judge inputs, outputs, errors, and report fields.
+
+#### Scenario: Maintainer reviews an answer failure
+- **WHEN** an answer-quality grade fails
+- **THEN** the JSON report shows whether the cause was missing or unsupported deterministic evidence, a subjective dimension, judge failure, or an earlier authoritative grade without requiring access to provider logs
+
+#### Scenario: Markdown summary is reviewed
+- **WHEN** a user opens the Markdown report
+- **THEN** answer-grounding and each requested semantic dimension appear in the dimension summary and each failed trial links to its detailed JSON evidence
+
+#### Scenario: Evaluation-set evidence is preserved
+- **WHEN** answer quality is graded for a development or release evaluation run
+- **THEN** the expanded report retains that run's original evaluation set, evidence class, suite version and digest, and case provenance without combining development and release scores
+
+#### Scenario: Judge output contains sensitive text
+- **WHEN** a judge response or error includes a configured secret or database credential
+- **THEN** persisted JSON and Markdown reports redact it under the same rules as existing evaluation evidence
+
+### Requirement: Reviewed live regression baseline
+QueryForge SHALL accept a versioned live-evaluation baseline that was derived from a completed, valid live report and deliberately approved outside the evaluation run. The baseline MUST identify its source report, evaluation set (`development` or `release`), suite path, suite version and digest, ordered case identifiers, provider and model, trials per case, dataset contract, and approved minimum outcome rates. Running an evaluation MUST NOT create, replace, or relax an approved baseline automatically.
+
+#### Scenario: Compatible baseline is selected
+- **WHEN** a contributor starts a live regression run with an approved baseline whose evaluation identities match the configured run
+- **THEN** QueryForge uses the baseline's evaluation set, suite path and digest, ordered case identifiers, provider/model identity, trial count, dataset contract, and quality floors for the comparison
+
+#### Scenario: Competing evaluation selection is supplied
+- **WHEN** a contributor supplies an evaluation set, suite path, case selector, or trial count in addition to a baseline
+- **THEN** the command fails with a controlled usage or baseline setup error rather than overriding the baseline identity
+
+#### Scenario: Baseline provenance is missing
+- **WHEN** a baseline does not identify a valid source live report or omits a required compatibility or quality field
+- **THEN** the run fails as a baseline setup error before any scored model trial begins
+
+#### Scenario: Normal live run completes
+- **WHEN** a contributor runs live evaluation without requesting baseline comparison
+- **THEN** QueryForge produces ordinary live evidence and does not treat that report as an approved baseline
+
+#### Scenario: Baseline would be changed by a run
+- **WHEN** a live result differs from the approved baseline
+- **THEN** QueryForge reports the difference without updating the approved baseline
+
+### Requirement: Live semantic and result regression comparison
+A baseline-backed live run SHALL exercise the configured model through the normal Ask Data workflow and compare the observed semantic disposition, safety, SQL/result correctness, diagnostic completeness, and repeated-trial consistency with the approved floors. The comparison MUST report aggregate, per-dimension, and per-case outcomes so an improvement elsewhere cannot conceal a regressed case. Unsafe execution MUST fail the live gate regardless of the approved baseline.
+
+#### Scenario: Model silently changes semantic disposition
+- **WHEN** the live model allows, clarifies, refuses, or declares unsupported a case differently from its declared expectation and the resulting semantic-disposition rate falls below an approved floor
+- **THEN** the comparison identifies the affected case and fails the live regression gate
+
+#### Scenario: Safe SQL returns a wrong result
+- **WHEN** live-generated SQL passes policy but returns rows that fail the case's deterministic result expectation
+- **THEN** result correctness and the affected case are reported as failed and the baseline comparison cannot treat the trial as correct
+
+#### Scenario: Aggregate improvement masks a case regression
+- **WHEN** the overall success rate meets its floor but one case's repeated-trial rate falls below its approved case floor
+- **THEN** the comparison reports that case regression and fails the live gate
+
+#### Scenario: Unsafe model output is blocked
+- **WHEN** live model output is rejected before execution but the trial violates an applicable safety expectation
+- **THEN** the hard safety gate fails even if every statistical quality floor is met
+
+#### Scenario: Reference calibration is run
+- **WHEN** reference mode executes scripted reference SQL
+- **THEN** its report remains harness-calibration evidence and is not compared with or substituted for the live-model baseline
+
+### Requirement: Reproducible live regression evidence
+Every baseline-backed live report SHALL record the baseline identity and digest, evaluation set and evidence classification, provider and model, suite path/version/digest and ordered case identifiers, dataset version and content identity, configured and completed trial counts, source and prompt/code revision evidence, per-trial latency, per-case grades, infrastructure failures, and every applied floor with its observed value and pass/fail result. Missing or incompatible identity evidence MUST invalidate the comparison rather than being interpreted as unchanged quality.
+
+#### Scenario: Compatible live run is reviewed
+- **WHEN** a baseline-backed live run completes
+- **THEN** its JSON and Markdown reports show enough identity, trial, latency, grade, and comparison detail to reproduce the selection and understand every gate decision
+
+#### Scenario: Configured provider or model differs
+- **WHEN** the live provider or model does not match the approved baseline
+- **THEN** the run fails as an incompatible-baseline setup error without presenting scores as a regression comparison
+
+#### Scenario: Suite or dataset differs
+- **WHEN** the evaluation set, suite path or digest, ordered case identifiers, trial count, or dataset contract differs from the baseline
+- **THEN** the run fails as an incompatible-baseline setup error and identifies the mismatched non-secret fields
+
+#### Scenario: Provider infrastructure fails
+- **WHEN** a timeout, rate limit, network failure, or provider error prevents a planned live trial from producing an agent result
+- **THEN** the report retains the failed trial and classifies the infrastructure failure separately without counting it as a capability pass or approving a new baseline
+
+### Requirement: Calibrated answer-quality baseline contract
+An approved live baseline SHALL record reviewed rates and enforce floors for directness, completeness, and clarity in addition to semantic disposition, safety, result correctness, diagnostics, and deterministic answer grounding. The baseline MUST identify the answer judge's provider and model and the version and content digest of the calibration benchmark used by its source report.
+
+#### Scenario: Approved baseline records answer quality
+- **WHEN** a clean judged live report is approved as baseline evidence
+- **THEN** its manifest records observed and floor rates for directness, completeness, and clarity together with judge and calibration identity
+
+#### Scenario: Legacy baseline lacks answer-quality evidence
+- **WHEN** a baseline does not contain the required subjective dimensions or judge and calibration identity
+- **THEN** the runner rejects it as an incompatible baseline before scored model trials begin
+
+#### Scenario: Judge identity differs from baseline
+- **WHEN** the configured answer judge provider or model differs from the approved baseline
+- **THEN** the runner fails compatibility before scored model trials begin
+
+#### Scenario: Calibration identity differs from baseline
+- **WHEN** the active answer-judge calibration version or content digest differs from the approved baseline
+- **THEN** the runner fails compatibility before scored model trials begin
+
+### Requirement: Baseline-backed runs require calibrated prose grading
+A live run using an approved baseline SHALL calibrate the pinned answer judge and grade every deterministically eligible trial for directness, completeness, and clarity without requiring a separate opt-in flag. Judge unavailability, malformed output, or calibration disagreement MUST invalidate the evidence rather than silently omitting subjective dimensions.
+
+#### Scenario: Baseline run starts
+- **WHEN** a user or credentialed workflow runs live evaluation with an approved baseline
+- **THEN** answer judging is enabled automatically and calibration completes before scored trials begin
+
+#### Scenario: Deterministic prerequisite fails
+- **WHEN** a trial fails status, safety, result, diagnostics, or deterministic answer grounding
+- **THEN** subjective grading is skipped for that trial and cannot convert the deterministic failure into a pass
+
+#### Scenario: Subjective dimension regresses
+- **WHEN** directness, completeness, or clarity falls below its approved floor
+- **THEN** the baseline comparison fails even if deterministic dimensions remain above their floors
+
+#### Scenario: Judge becomes unavailable
+- **WHEN** the calibrated judge times out, returns malformed output, or otherwise becomes unavailable during a baseline-backed run
+- **THEN** the report retains completed evidence, classifies the judge failure as an evidence-setup failure, and does not report a passing gate
+
+### Requirement: Answer-judge calibration distinguishes dimensions
+The versioned answer-judge calibration benchmark SHALL contain reviewed examples that demonstrate passing and failing outcomes for every graded dimension and SHALL include cases where directness, completeness, and clarity do not all share the same expected verdict. Calibration MUST reproduce every expected verdict exactly before semantic grades can count.
+
+#### Scenario: Judge distinguishes answer qualities
+- **WHEN** answer judging is requested or required by a baseline
+- **THEN** calibration verifies the judge against all-pass, all-fail, and dimension-separating examples before trial grading
+
+#### Scenario: Judge collapses distinct dimensions
+- **WHEN** a judge returns the same verdicts for calibration examples whose reviewed directness, completeness, and clarity outcomes differ
+- **THEN** calibration fails and no subjective trial evidence is accepted
+
+### Requirement: Staged live evidence preserves one gate contract
+A full judged live evaluation MAY be executed as smaller case chunks and composed offline. Composition SHALL succeed only when every source report is valid and infrastructure-clean; all source reports share the same report version, evaluation set, suite, source code, prompt code, answer judge, calibration, dataset, pacing, and trials-per-case identity; every provider-using source report identifies the same agent provider/model; the chunks cover every selected case exactly once; and every case contains the required trial count. A provider-free local-policy chunk MAY omit agent provider/model identity and inherit the single identity established by provider-using chunks. The composed report SHALL retain the source report identities and SHALL be evaluated by the same baseline comparison as a single-run report.
+
+#### Scenario: Compatible chunks cover the suite
+- **WHEN** valid judged live reports have identical pinned identities and their non-overlapping case selections cover the required suite with the required trials
+- **THEN** the evaluator produces one valid composed report with recomputed aggregate rates and retained source report identifiers
+
+#### Scenario: Chunk identity differs
+- **WHEN** any source report differs in suite, source code, prompt code, provider/model, judge, calibration, dataset, pacing, or trials-per-case identity
+- **THEN** composition fails before producing baseline evidence
+
+#### Scenario: Local-policy chunk makes no agent call
+- **WHEN** an infrastructure-clean chunk contains only locally decided policy cases and therefore records no agent provider/model
+- **THEN** composition uses the single agent identity pinned by provider-using chunks and still rejects absent or conflicting provider-using identities
+
+#### Scenario: Coverage is missing or duplicated
+- **WHEN** a case is missing, appears in more than one chunk, or lacks the required number of trials
+- **THEN** composition fails rather than averaging or silently accepting incomplete evidence
+
+#### Scenario: Composed evidence is replayed against a baseline
+- **WHEN** compatible staged reports are composed with an approved baseline
+- **THEN** the evaluator validates baseline identity, compares all deterministic and subjective floors, preserves hard-safety and zero-infrastructure-failure requirements, and returns the final gate result

@@ -7,11 +7,23 @@ Defines the Ask Data tool, QueryForge's first user-facing capability for turning
 ## Requirements
 
 ### Requirement: Natural-language question answering
-The system SHALL allow a user to submit a natural-language data question and receive a response containing the original question, execution status, trace identity, intent-policy outcome when available, generated SQL when available, validation outcome when available, result rows when available, and a concise answer, clarification prompt, or failure reason.
+The system SHALL allow a user to submit a natural-language data question and receive a response containing the original question, execution status, trace identity, intent-policy outcome when available, generated SQL when available, validation outcome when available, result rows when available, and a concise answer, clarification prompt, or failure reason. A successful answer MUST identify returned values with clear business labels or question context grounded in the user's request and returned rows; it MUST NOT rely on unexplained generic or abbreviated SQL output labels.
 
 #### Scenario: Supported question returns data
 - **WHEN** a user asks a supported analytical question
 - **THEN** the Ask Data tool returns a successful status, the SQL used, result rows, a trace identity, and a concise answer
+
+#### Scenario: Generic scalar output is contextualized
+- **WHEN** a successful scalar query returns a generic output name such as `count`
+- **THEN** the answer identifies what was counted using business context from the user's question instead of presenting only the generic output name and value
+
+#### Scenario: Abbreviated output label is expanded
+- **WHEN** a successful query returns a recognizable abbreviated analytical label such as `avg_order_value`
+- **THEN** the answer presents an unabbreviated human-readable label such as `Average order value`
+
+#### Scenario: Generic tabular column retains business context
+- **WHEN** a successful multi-row query returns a generic projected column such as `name`
+- **THEN** the answer retains enough context from the user's question or a descriptive result label for the user to identify the represented business entity
 
 #### Scenario: Unsupported question cannot be answered
 - **WHEN** a user asks a question that cannot be mapped to the available data context
@@ -32,6 +44,87 @@ The system SHALL allow a user to submit a natural-language data question and rec
 #### Scenario: Trace identity is present for every terminal status
 - **WHEN** an Ask Data request returns `ok`, `blocked`, `unsupported`, `clarification_required`, `invalid`, or `error`
 - **THEN** the response includes the trace identity for the completed run
+
+### Requirement: Context-aware metric resolution before SQL generation
+For requests that pass deterministic intent screening, Ask Data SHALL resolve metric meaning from the user's question, the active governed metric definitions, the approved schema context, and bounded same-session conversation context before requesting candidate SQL. The resolution MUST use a structured contract and MUST pass deterministic validation before it can authorize SQL generation. Deterministic intent screening, resolution validation, SQL policy, approved-query enforcement, and read-only execution remain authoritative over model output and remembered context.
+
+#### Scenario: Generic revenue request has multiple governed meanings
+- **WHEN** a user asks "What is total revenue?" and completed revenue, gross revenue, and net revenue are distinct valid governed interpretations
+- **THEN** Ask Data returns `clarification_required` with a concise question identifying the valid revenue choices and does not request candidate SQL or execute a database query
+
+#### Scenario: Explicit governed metric proceeds
+- **WHEN** a user explicitly asks for completed revenue, gross revenue, or net revenue and the structured resolution identifies exactly that governed metric
+- **THEN** deterministic resolution validation permits SQL generation with the resolved metric definition available to the SQL generator
+
+#### Scenario: Bounded conversation context resolves the metric
+- **WHEN** a same-session follow-up uses an otherwise ambiguous metric phrase but bounded prior context identifies one governed metric unambiguously
+- **THEN** Ask Data may resolve that metric and proceed to SQL generation while continuing to apply all active SQL validation and execution controls
+
+#### Scenario: Conversation context does not resolve the metric
+- **WHEN** prior context is unavailable, conflicting, or still permits multiple governed metric interpretations
+- **THEN** Ask Data returns `clarification_required` and does not request candidate SQL or execute a database query
+
+#### Scenario: Deterministic rejection remains authoritative
+- **WHEN** deterministic intent screening blocks or rejects a request before semantic resolution
+- **THEN** Ask Data returns the deterministic policy outcome without calling the semantic resolver, requesting candidate SQL, or executing a database query
+
+#### Scenario: Resolver reports multiple governed metrics
+- **WHEN** the structured semantic resolution contains more than one valid governed metric candidate and no single resolved metric
+- **THEN** deterministic resolution validation requires `clarification_required` and prevents SQL generation and database execution
+
+#### Scenario: Resolver output is invalid
+- **WHEN** semantic resolution returns malformed data, an unknown metric identifier, contradictory fields, or a resolved decision that does not identify exactly one valid governed metric
+- **THEN** Ask Data returns a traceable non-successful result and does not request candidate SQL or execute a database query
+
+#### Scenario: Supported question does not use a governed metric
+- **WHEN** a supported analytical question does not refer to any governed metric and the validated structured resolution marks metric resolution as not applicable
+- **THEN** Ask Data may proceed to SQL generation without inventing a governed metric, subject to the existing intent and SQL safety boundaries
+
+#### Scenario: Semantic provider call fails
+- **WHEN** the configured provider times out, returns an error, or is unavailable during semantic resolution
+- **THEN** Ask Data returns a traceable error and does not request candidate SQL or execute a database query
+
+### Requirement: Refund aggregates preserve table grain
+The system SHALL prevent database execution when generated SQL directly reads both line-item facts and refund-event facts within the same aggregation scope, because joining these one-to-many grains can count a refund once per line item. The system SHALL continue to allow analytics that aggregate the two fact sets independently and combine only their aggregate results.
+
+#### Scenario: Direct line-item and refund aggregation is rejected
+- **WHEN** generated SQL joins `order_items` and `refunds` in one aggregation scope, including through their shared order, and could repeat a refund across multiple line items
+- **THEN** Ask Data returns an invalid validation result with a clear grain-mismatch policy reason and does not execute that candidate
+
+#### Scenario: Independent net-revenue aggregates are allowed
+- **WHEN** generated SQL computes gross revenue from purchase-time line totals and refund amount in independent aggregate scopes before subtracting the two results
+- **THEN** the SQL remains eligible for normal approval and read-only execution
+
+#### Scenario: Fan-out validation can use the bounded repair path
+- **WHEN** an allowed net-revenue request first produces a candidate rejected for the line-item/refund grain mismatch
+- **THEN** Ask Data may request at most one repaired candidate and executes it only if the repaired SQL independently aggregates the fact sets and passes every existing validation and approval boundary
+
+#### Scenario: Canonical demo totals are not multiplied
+- **WHEN** independently aggregated net-revenue SQL runs against the canonical demo database containing orders with multiple line items
+- **THEN** the result uses gross revenue `2260.00` and refund amount `265.00` exactly once to return net revenue `1995.00`
+
+### Requirement: Grounded resolved-metric scalar answers
+For a successful result containing exactly one row and one column, when Ask Data has a validated resolved governed metric, the user-visible answer SHALL state that metric's governed display name, the scalar value returned in the row, and the metric's governed definition or scope. The value MUST come only from the returned row, and the metric name and definition MUST come only from locally validated resolved-metric metadata. The answer MUST NOT infer or substitute those facts from the user's wording, generated SQL, a SQL column alias, or unvalidated model output.
+
+#### Scenario: Resolved scalar metric is explained
+- **WHEN** a successful query returns one scalar value and the request has one validated resolved governed metric
+- **THEN** the answer identifies that governed metric, presents the returned scalar value, and communicates the metric's governed definition or scope
+
+#### Scenario: SQL alias conflicts with governed metric name
+- **WHEN** a successful one-row, one-column result uses a generic or conflicting column alias but validated resolved-metric metadata is available
+- **THEN** the answer uses the governed metric display name and definition while preserving the scalar value from the returned row
+
+#### Scenario: Returned scalar is not recomputed
+- **WHEN** a successful resolved-metric query returns a scalar value
+- **THEN** the answer presents that returned value without recomputing, adjusting, or supplementing it from the metric definition, generated SQL, or question text
+
+#### Scenario: No validated resolved metric is available
+- **WHEN** a successful one-row, one-column result has no locally validated resolved-metric metadata
+- **THEN** Ask Data uses its existing scalar answer behavior and does not claim a governed metric meaning
+
+#### Scenario: Result is not a successful scalar
+- **WHEN** a request returns no rows, multiple rows, multiple columns, or a non-successful status
+- **THEN** Ask Data preserves the existing applicable answer, preview, clarification, or failure behavior without adding a resolved-metric explanation
 
 ### Requirement: Stabilized single-turn workflow contracts
 The Ask Data tool SHALL process each request through a single-turn workflow with structured contracts for the external request, generated SQL candidate, approved query, query result, final result, and trace identity. These contracts SHALL preserve the current user-visible statuses, answer fields, generated SQL visibility, result rows, policy reason visibility, and trace identity.

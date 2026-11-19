@@ -62,7 +62,9 @@ def main() -> None:
     ask_parser.add_argument("--session", help="Session id for same-process memory context.")
     ask_parser.add_argument("question", nargs="+", help="Question to ask.")
 
-    chat_parser = subparsers.add_parser("chat", help="Ask multiple questions in one memory session.")
+    chat_parser = subparsers.add_parser(
+        "chat", help="Ask multiple questions in one memory session."
+    )
     chat_parser.add_argument("--session", required=True, help="Session id for this chat.")
 
     evals_parser = subparsers.add_parser("evals", help="Evaluate Ask Data on known tasks.")
@@ -71,27 +73,111 @@ def main() -> None:
         "run", help="Run reference calibration or live LLM evals."
     )
     run_parser.add_argument("--mode", choices=["reference", "live"], default="reference")
-    run_parser.add_argument("--split", choices=["dev", "held-out", "all"], default="dev")
+    run_parser.add_argument(
+        "--evaluation-set",
+        choices=["development", "release"],
+        default=None,
+    )
     run_parser.add_argument(
         "--case", action="append", default=[], help="Select a case ID; repeatable."
     )
-    run_parser.add_argument("--trials", type=int, choices=range(1, 11), default=1)
+    run_parser.add_argument("--trials", type=int, choices=range(1, 11), default=None)
     run_parser.add_argument("--suite", type=Path, help="Path to a versioned evaluation JSON suite.")
+    run_parser.add_argument(
+        "--baseline",
+        type=Path,
+        help="Path to an approved live-evaluation baseline.",
+    )
+    run_parser.add_argument(
+        "--live-delay-seconds",
+        type=float,
+        default=0.0,
+        help="Minimum pause between live provider calls (0-60 seconds).",
+    )
+    run_parser.add_argument(
+        "--judge-answers",
+        action="store_true",
+        help="Calibrate and run subjective directness, completeness, and clarity grading.",
+    )
     run_parser.add_argument("--output-dir", type=Path, default=Path("evaluation-results"))
+    compose_parser = eval_commands.add_parser(
+        "compose", help="Compose compatible judged live case-chunk reports."
+    )
+    compose_parser.add_argument(
+        "--report",
+        action="append",
+        required=True,
+        type=Path,
+        help="Source report.json path; repeat for every case chunk.",
+    )
+    compose_parser.add_argument(
+        "--baseline",
+        type=Path,
+        help="Optional approved baseline to compare after composition.",
+    )
+    compose_parser.add_argument("--output-dir", type=Path, default=Path("evaluation-results"))
 
     args = parser.parse_args()
 
     if args.command == "evals":
-        from queryforge.eval_cases import DEFAULT_SUITE
-        from queryforge.evals import run_evaluations, write_report
+        from queryforge.evals import compose_live_reports, run_evaluations, write_report
+
+        if args.eval_command == "compose":
+            report = compose_live_reports(
+                tuple(args.report),
+                baseline_path=args.baseline,
+            )
+            try:
+                path = write_report(report, args.output_dir)
+            except (OSError, ValueError) as exc:
+                print(
+                    json.dumps(
+                        {"error": f"Could not write evaluation report: {type(exc).__name__}"}
+                    )
+                )
+                raise SystemExit(2) from exc
+            print(
+                json.dumps(
+                    {
+                        "mode": report["mode"],
+                        "evaluation_set": report["evaluation_set"],
+                        "evidence_class": report["evidence_class"],
+                        "valid": report["valid"],
+                        "summary": report["summary"],
+                        "setup_error": report["setup_error"],
+                        "baseline": report.get("baseline"),
+                        "baseline_comparison": report.get("baseline_comparison"),
+                        "source_reports": report["source_reports"],
+                        "report": str(path.resolve()),
+                    },
+                    indent=2,
+                )
+            )
+            raise SystemExit(report["exit_code"])
+
+        if args.baseline is not None:
+            if args.mode != "live":
+                parser.error("--baseline requires --mode live")
+            if (
+                args.evaluation_set is not None
+                or args.suite is not None
+                or args.case
+                or args.trials is not None
+            ):
+                parser.error("--baseline owns --evaluation-set, --suite, --case, and --trials")
 
         report = asyncio.run(
             run_evaluations(
-                args.suite or DEFAULT_SUITE,
+                args.suite,
                 mode=args.mode,
-                split=args.split,
+                evaluation_set=(
+                    None if args.baseline is not None else args.evaluation_set or "development"
+                ),
                 ids=tuple(args.case),
-                trials=args.trials,
+                trials=None if args.baseline is not None else args.trials or 1,
+                baseline_path=args.baseline,
+                live_delay_seconds=args.live_delay_seconds,
+                judge_answers=args.judge_answers,
             )
         )
         try:
@@ -103,9 +189,13 @@ def main() -> None:
             json.dumps(
                 {
                     "mode": report["mode"],
+                    "evaluation_set": report["evaluation_set"],
+                    "evidence_class": report["evidence_class"],
                     "valid": report["valid"],
                     "summary": report["summary"],
                     "setup_error": report["setup_error"],
+                    "baseline": report.get("baseline"),
+                    "baseline_comparison": report.get("baseline_comparison"),
                     "report": str(path.resolve()),
                 },
                 indent=2,

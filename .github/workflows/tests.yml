@@ -19,11 +19,25 @@ jobs:
       - run: uv sync --locked --python 3.12
       - run: docker compose up -d --wait postgres
       - run: uv run queryforge init-db
-      - run: uv run ruff check .
-      - run: uv run pytest
+      - name: Lint
+        run: uv run ruff check .
+      - name: Unit tests
+        run: uv run pytest tests/unit
+      - name: Postgres integration tests
+        run: uv run pytest tests/integration
+      - name: Evaluation harness tests
+        run: >-
+          uv run pytest
+          tests/eval_harness/test_case_contracts.py
+          tests/eval_harness/test_grading.py
+          tests/eval_harness/test_runner.py
+          tests/eval_harness/test_reporting_cli.py
+      - name: Reference-suite integration tests
+        run: uv run pytest tests/eval_harness/test_reference_suite_with_postgres.py
         env:
           QUERYFORGE_TEST_EVAL_DB: "1"
-      - run: uv run queryforge evals run --mode reference --split all
+      - name: Development reference evaluation
+        run: uv run queryforge evals run --mode reference --evaluation-set development
       - name: Retain reference evidence
         if: always()
         uses: actions/upload-artifact@v4

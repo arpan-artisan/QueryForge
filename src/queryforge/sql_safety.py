@@ -180,6 +180,10 @@ def _validate_ast(expression: exp.Select, original_sql: str) -> SQLPolicyDecisio
     if join_decision is not None:
         return join_decision
 
+    grain_decision = _validate_aggregate_grains(expression, original_sql)
+    if grain_decision is not None:
+        return grain_decision
+
     star_decision = _validate_stars(expression, original_sql)
     if star_decision is not None:
         return star_decision
@@ -198,14 +202,16 @@ def _validate_join_shapes(expression: exp.Select, original_sql: str) -> SQLPolic
         left_table = _direct_from_table(select)
         for join in select.args.get("joins") or ():
             joined_table = join.this if isinstance(join.this, exp.Table) else None
+            is_cross_join = join.args.get("kind") == "CROSS"
+            has_condition = join.args.get("on") is not None or join.args.get("using") is not None
             if (
                 left_table is not None
                 and joined_table is not None
                 and _is_approved_base_table(left_table)
                 and _is_approved_base_table(joined_table)
                 and (
-                    join.args.get("kind") == "CROSS"
-                    or (join.args.get("on") is None and join.args.get("using") is None)
+                    is_cross_join
+                    or not has_condition
                 )
             ):
                 return _blocked(
@@ -213,6 +219,31 @@ def _validate_join_shapes(expression: exp.Select, original_sql: str) -> SQLPolic
                     "Direct cross joins between approved base tables are not allowed.",
                     original_sql,
                 )
+            if join.args.get("side") and not has_condition:
+                return _invalid(
+                    "missing_join_condition",
+                    "Non-CROSS joins require an ON or USING condition.",
+                    original_sql,
+                )
+    return None
+
+
+def _validate_aggregate_grains(
+    expression: exp.Select,
+    original_sql: str,
+) -> SQLPolicyDecision | None:
+    for select in expression.find_all(exp.Select):
+        direct_tables = {
+            _normalize_identifier(table.this)
+            for table in select.find_all(exp.Table)
+            if table.find_ancestor(exp.Select) is select and _is_approved_base_table(table)
+        }
+        if {"order_items", "refunds"} <= direct_tables:
+            return _invalid(
+                "aggregate_grain_mismatch",
+                "Aggregate order_items revenue and refunds independently before combining them.",
+                original_sql,
+            )
     return None
 
 

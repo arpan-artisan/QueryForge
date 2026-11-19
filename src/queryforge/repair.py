@@ -14,6 +14,8 @@ REPAIRABLE_VALIDATION_CODES = frozenset(
         "missing_data_source",
         "missing_subquery_alias",
         "ambiguous_column",
+        "aggregate_grain_mismatch",
+        "missing_join_condition",
     }
 )
 

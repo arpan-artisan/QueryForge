@@ -1,0 +1,55 @@
+name: Credentialed live agent regression
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  development-live-baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.17"
+          enable-cache: true
+      - run: uv sync --locked --python 3.12
+      - name: Require live-evaluation configuration
+        shell: bash
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: |
+          if [ -z "$GROQ_API_KEY" ]; then
+            echo "::error::GROQ_API_KEY is required for the credentialed live gate."
+            exit 2
+          fi
+          test -f evals/ask-data/live-baseline.json || {
+            echo "::error::The approved live baseline is missing."
+            exit 2
+          }
+      - run: docker compose up -d --wait postgres
+      - run: uv run queryforge init-db
+      - name: Development live baseline gate
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          QUERYFORGE_LLM_PROVIDER: groq
+          QUERYFORGE_LLM_MODEL: openai/gpt-oss-20b
+          QUERYFORGE_EVAL_JUDGE_MODEL: openai/gpt-oss-20b
+        run: >-
+          uv run queryforge evals run
+          --mode live
+          --baseline evals/ask-data/live-baseline.json
+          --live-delay-seconds 30
+      - name: Retain live evaluation reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-agent-regression-reports
+          path: evaluation-results/
+          if-no-files-found: warn
+      - name: Stop database
+        if: always()
+        run: docker compose down

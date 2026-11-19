@@ -26,6 +26,7 @@ from queryforge.models import (
     ApprovedQuery,
     AskDataResult,
     IntentPolicyDecision,
+    MetricResolutionDecision,
     QueryContext,
     QueryResult,
     RunTrace,
@@ -48,6 +49,11 @@ from queryforge.repair import (
     repair_reason,
     validation_failure_is_repairable,
 )
+from queryforge.semantic_resolution import (
+    MetricResolutionError,
+    resolve_metric_for_request,
+    resolved_metric_definition,
+)
 from queryforge.sql_safety import SQLSafetyError
 from queryforge.tools import QueryExecutorTool
 
@@ -61,6 +67,7 @@ WORKFLOW_STAGES = (
     "intent_policy",
     "context_build",
     "provider_resolution",
+    "semantic_metric_resolution",
     "llm_sql_generation",
     "sql_validation",
     "query_approval",
@@ -84,6 +91,7 @@ class AskDataGraphState(TypedDict, total=False):
     intent_decision: IntentPolicyDecision
     context: QueryContext
     llm: LLMProvider
+    metric_resolution: MetricResolutionDecision
     provider: str
     model: str
     candidate: SQLCandidate
@@ -330,11 +338,134 @@ class AskDataGraph:
         )
         return {"llm": llm, "provider": llm.provider_name, "model": llm.model_name}
 
+    async def resolve_metric(self, state: AskDataGraphState) -> dict[str, Any]:
+        started_at, started_perf = _start_timer()
+        llm = state["llm"]
+        try:
+            decision = await resolve_metric_for_request(
+                llm,
+                state["request"],
+                state["context"],
+            )
+        except MetricResolutionError:
+            reason = "Metric resolution failed deterministic validation."
+            state["recorder"].record_step(
+                "semantic_metric_resolution",
+                "error",
+                metadata={
+                    "provider": llm.provider_name,
+                    "model": llm.model_name,
+                    "error_category": "semantic_resolution_invalid",
+                },
+                error=reason,
+                started_at=started_at,
+                duration_ms=_elapsed_ms(started_perf),
+            )
+            return _terminal_update(
+                status="error",
+                answer=reason,
+                failed_stage="semantic_metric_resolution",
+                skip_reason="semantic_resolution_invalid",
+            ) | {
+                "policy_code": "semantic_resolution_invalid",
+                "policy_reason": reason,
+            }
+        except LLMProviderError as exc:
+            state["recorder"].record_step(
+                "semantic_metric_resolution",
+                "error",
+                metadata={
+                    "provider": llm.provider_name,
+                    "model": llm.model_name,
+                    "error_category": "semantic_resolution_provider_error",
+                },
+                error=str(exc),
+                started_at=started_at,
+                duration_ms=_elapsed_ms(started_perf),
+            )
+            return _terminal_update(
+                status="error",
+                answer=f"Metric resolution failed: {exc}",
+                failed_stage="semantic_metric_resolution",
+                skip_reason="semantic_resolution_provider_error",
+            ) | {
+                "policy_code": "semantic_resolution_provider_error",
+                "policy_reason": str(exc),
+            }
+        except Exception as exc:  # noqa: BLE001 - provider failures must return traceable results.
+            reason = f"Unexpected metric resolution failure: {exc}"
+            state["recorder"].record_step(
+                "semantic_metric_resolution",
+                "error",
+                metadata={
+                    "provider": llm.provider_name,
+                    "model": llm.model_name,
+                    "error_category": "unexpected_semantic_resolution_error",
+                    "exception_type": type(exc).__name__,
+                },
+                error=reason,
+                started_at=started_at,
+                duration_ms=_elapsed_ms(started_perf),
+            )
+            return _terminal_update(
+                status="error",
+                answer=reason,
+                failed_stage="semantic_metric_resolution",
+                skip_reason="semantic_resolution_provider_error",
+            ) | {
+                "policy_code": "semantic_resolution_provider_error",
+                "policy_reason": reason,
+            }
+
+        trace_status: TraceStepStatus = (
+            "clarification_required"
+            if decision.status == "clarification_required"
+            else "ok"
+        )
+        state["recorder"].record_step(
+            "semantic_metric_resolution",
+            trace_status,
+            metadata={
+                "provider": llm.provider_name,
+                "model": llm.model_name,
+                "resolution_status": decision.status,
+                "candidate_metric_ids": decision.candidate_metric_ids,
+                "resolved_metric_id": decision.resolved_metric_id,
+                "reason": decision.reason,
+            },
+            started_at=started_at,
+            duration_ms=_elapsed_ms(started_perf),
+        )
+        if decision.status != "clarification_required":
+            return {"metric_resolution": decision}
+
+        question = decision.clarification_question or "Which metric do you mean?"
+        intent_decision = IntentPolicyDecision(
+            status="clarification_required",
+            category="clarification_required",
+            code="clarify_ambiguous_metric",
+            reason=question,
+        )
+        return _terminal_update(
+            status="clarification_required",
+            answer=question,
+            failed_stage="semantic_metric_resolution",
+            skip_reason="semantic_resolution_clarification_required",
+        ) | {
+            "metric_resolution": decision,
+            "intent_decision": intent_decision,
+        }
+
     async def generate_sql(self, state: AskDataGraphState) -> dict[str, Any]:
         started_at, started_perf = _start_timer()
         llm = state["llm"]
         try:
-            candidate = await generate_sql_candidate(llm, state["request"], state["context"])
+            candidate = await generate_sql_candidate(
+                llm,
+                state["request"],
+                state["context"],
+                state["metric_resolution"],
+            )
         except LLMUnsupportedQuestionError as exc:
             state["recorder"].record_step(
                 "llm_sql_generation",
@@ -492,6 +623,7 @@ class AskDataGraph:
                 llm,
                 state["request"],
                 state["context"],
+                state["metric_resolution"],
                 failed_sql=state["repair_failed_sql"],
                 failure_source=state["repair_failure_source"],
                 failure_reason=state["repair_failure_reason"],
@@ -720,7 +852,12 @@ class AskDataGraph:
     async def render_answer(self, state: AskDataGraphState) -> dict[str, Any]:
         started_at, started_perf = _start_timer()
         query_result = state["query_result"]
-        answer = render_rows_as_answer(state["request"].question, query_result.rows)
+        metric = resolved_metric_definition(state["metric_resolution"])
+        answer = render_rows_as_answer(
+            state["request"].question,
+            query_result.rows,
+            metric,
+        )
         state["recorder"].record_step(
             "answer_rendering",
             "ok",
@@ -860,6 +997,7 @@ def build_ask_data_graph(nodes: AskDataGraph):
     graph.add_node("intent_policy", nodes.evaluate_intent)
     graph.add_node("context_build", nodes.build_context)
     graph.add_node("provider_resolution", nodes.resolve_provider)
+    graph.add_node("semantic_metric_resolution", nodes.resolve_metric)
     graph.add_node("llm_sql_generation", nodes.generate_sql)
     graph.add_node("sql_validation", nodes.validate_sql)
     graph.add_node("sql_repair_generation", nodes.repair_sql)
@@ -883,6 +1021,11 @@ def build_ask_data_graph(nodes: AskDataGraph):
     graph.add_conditional_edges(
         "provider_resolution",
         _route_after_provider,
+        {"ready": "semantic_metric_resolution", "terminal": "record_skipped_downstream"},
+    )
+    graph.add_conditional_edges(
+        "semantic_metric_resolution",
+        _route_after_metric_resolution,
         {"ready": "llm_sql_generation", "terminal": "record_skipped_downstream"},
     )
     graph.add_conditional_edges(
@@ -954,6 +1097,10 @@ def _route_after_memory(state: AskDataGraphState) -> str:
 
 def _route_after_provider(state: AskDataGraphState) -> str:
     return "ready" if "llm" in state else "terminal"
+
+
+def _route_after_metric_resolution(state: AskDataGraphState) -> str:
+    return "terminal" if "status" in state else "ready"
 
 
 def _route_after_generation(state: AskDataGraphState) -> str:

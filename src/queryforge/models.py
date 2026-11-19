@@ -29,6 +29,7 @@ type TraceStepStatus = Literal[
 ]
 type RequestSource = Literal["cli", "eval", "api", "ui"]
 type PolicyStatus = Literal["allowed", "blocked", "unsupported", "invalid", "clarification_required"]
+type MetricResolutionStatus = Literal["resolved", "clarification_required", "not_applicable"]
 
 
 def generate_trace_id() -> str:
@@ -53,6 +54,18 @@ class AgentRequest(QueryForgeModel):
 class QueryContext(QueryForgeModel):
     schema_text: str = Field(min_length=1)
     examples: list[str] = Field(default_factory=list)
+
+
+class MetricResolutionCandidate(QueryForgeModel):
+    status: MetricResolutionStatus
+    candidate_metric_ids: list[str] = Field(default_factory=list, max_length=16)
+    resolved_metric_id: str | None = None
+    reason: str = Field(min_length=1, max_length=500)
+    clarification_question: str | None = Field(default=None, max_length=500)
+
+
+class MetricResolutionDecision(MetricResolutionCandidate):
+    pass
 
 
 class SQLCandidate(QueryForgeModel):

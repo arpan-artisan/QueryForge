@@ -203,10 +203,12 @@ provider, model, validation status, SQL policy code, and SQL policy reason.
 
 ## Ask Data Evaluations
 
-The current eval suite has 36 commerce and policy questions: 26 development and
-10 held-out cases. Every successful analytics task has independently declared
-expected values and a reference query that is checked against Postgres before
-trials begin.
+Evaluation data is separated by evidence purpose. `evals/ask-data/development.json`
+contains 37 regression cases used during ordinary development and CI.
+`evals/ask-data/release.json` contains 10 independently reviewed release cases
+that have not informed implementation changes. Every successful analytics task
+has independently declared expected values and a reference query that is checked
+against Postgres before trials begin.
 
 ```bash
 # Calibrate the harness and exercise the actual runtime/DB without an LLM.
@@ -218,27 +220,67 @@ uv run queryforge evals run --mode live
 # Repeat a small development selection to measure consistency.
 uv run queryforge evals run --mode live --case completed-revenue --trials 3
 
-# Run held-out questions after finishing changes against the dev set.
-uv run queryforge evals run --mode live --split held-out
+# Pace a larger live run when provider throttling would distort the evidence.
+uv run queryforge evals run --mode live --trials 3 --live-delay-seconds 30 --judge-answers
 
-# Full deterministic regression suite (also used in CI).
-uv run queryforge evals run --mode reference --split all
+# Calibrate release references explicitly, without an LLM.
+uv run queryforge evals run --mode reference --evaluation-set release
+
+# Opt in to calibrated directness, completeness, and clarity judging.
+uv run queryforge evals run --mode reference --case net-revenue --judge-answers
+
+# Assess release cases with the configured LLM.
+uv run queryforge evals run --mode live --evaluation-set release
+
+# After a reviewed baseline exists, run its pinned live regression gate.
+uv run queryforge evals run --mode live --baseline evals/ask-data/live-baseline.json --live-delay-seconds 30
 ```
 
 Postgres must already be running and initialized. Evals never reset it. Reports
 are written to ignored `evaluation-results/<run-id>/report.json` and `report.md`.
-They contain actual answers, rows, generated SQL, local traces, per-dimension
-grades, repair-attempt evidence, failure categories, and reproducibility metadata.
-The deterministic v1 gate is the full reference suite:
-`uv run queryforge evals run --mode reference --split all`. Live runs are
-baseline evidence for the configured provider/model, not a substitute for the
-reference gate. If credentials, quota, network, or provider availability prevent
-a live run, record the unavailable reason in the verification notes and keep the
-reference gate unchanged. Exit codes: `0` all selected trials pass, `1` graded
-failures, `2` invalid setup/environment or report failure.
+They contain actual answers, rows, generated SQL, local traces, deterministic
+answer-grounding evidence, per-dimension grades, repair-attempt evidence, failure
+categories, and reproducibility metadata. `--judge-answers` separately calibrates
+the configured judge before adding directness, completeness, and clarity; it is
+optional and never overrides deterministic failures.
+The deterministic development gate used in CI is
+`uv run queryforge evals run --mode reference`. Release evidence requires a
+separate explicit `--evaluation-set release` run and is never mixed with the
+development score. Live runs are evidence for the configured provider/model,
+not a substitute for reference calibration. Reports label their evidence class
+as `development_regression` or `release_assessment`. Without a baseline, exit
+codes mean `0` all selected trials pass, `1` completed graded failures, and `2`
+invalid setup/environment or report failure. With a baseline, `0` means the
+reviewed comparison passed, `1` means the completed gate failed (including
+infrastructure-failed trials), and `2` means preflight, compatibility, or report
+generation prevented a valid comparison.
+An approved baseline owns its evaluation set, suite, ordered case IDs, trial
+count, provider/model, dataset identity, and quality floors. Baseline runs reject
+competing selection arguments, require a `1.0` safety floor, fail on infrastructure
+errors, and compare per-case as well as aggregate rates. The runner never creates
+or updates an approved baseline automatically.
+The manually dispatched `Credentialed live agent regression` workflow runs the
+approved development command separately from credential-free reference CI and
+always retains its generated reports.
 
 See `docs/evaluations.md` for task authoring, grading rules, limitations, and
 the manual review process derived from the supplied Anthropic guidance.
+
+The verification code is separated by dependency and purpose:
+
+```powershell
+uv run pytest tests/unit
+uv run pytest tests/integration
+uv run pytest tests/eval_harness
+$env:QUERYFORGE_TEST_EVAL_DB = "1"; uv run pytest tests/eval_harness/test_reference_suite_with_postgres.py
+```
+
+Unit tests use fakes or in-memory state. Integration tests exercise Postgres.
+Evaluation-harness tests verify case contracts, graders, runners, reports, and
+the opt-in reference-suite integration. Actual development/release inputs remain
+under `evals/ask-data/`; generated evidence remains under ignored
+`evaluation-results/<run-id>/` directories. `uv run pytest` still runs the
+aggregate suite.
 
 ## Product Direction
 
@@ -282,5 +324,5 @@ uv run pytest
 uv run ruff check .
 openspec validate complete-ask-data-v1 --strict
 openspec validate --specs
-uv run queryforge evals run --mode reference --split all
+uv run queryforge evals run --mode reference
 ```
