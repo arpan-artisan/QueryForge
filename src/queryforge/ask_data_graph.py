@@ -51,6 +51,7 @@ from queryforge.repair import (
 )
 from queryforge.semantic_resolution import (
     MetricResolutionError,
+    clarification_candidates,
     resolve_metric_for_request,
     resolved_metric_definition,
 )
@@ -138,7 +139,9 @@ class AskDataGraph:
         self._graph = build_ask_data_graph(self)
 
     async def run(self, request: AgentRequest | str) -> AskDataResult:
-        agent_request = request if isinstance(request, AgentRequest) else AgentRequest(question=request)
+        agent_request = (
+            request if isinstance(request, AgentRequest) else AgentRequest(question=request)
+        )
         trace_id = generate_trace_id()
         state: AskDataGraphState = {
             "request": agent_request,
@@ -418,9 +421,7 @@ class AskDataGraph:
             }
 
         trace_status: TraceStepStatus = (
-            "clarification_required"
-            if decision.status == "clarification_required"
-            else "ok"
+            "clarification_required" if decision.status == "clarification_required" else "ok"
         )
         state["recorder"].record_step(
             "semantic_metric_resolution",
@@ -560,9 +561,9 @@ class AskDataGraph:
         }
 
         if decision.status != "allowed":
-            repair_allowed = (
-                not state.get("repair_used", False) and validation_failure_is_repairable(decision)
-            )
+            repair_allowed = not state.get(
+                "repair_used", False
+            ) and validation_failure_is_repairable(decision)
             self._record_repair_eligibility(
                 state,
                 allowed=repair_allowed,
@@ -774,9 +775,9 @@ class AskDataGraph:
             }
         except psycopg.Error as exc:
             sql = state["approved_query"].sql
-            repair_allowed = (
-                not state.get("repair_used", False) and execution_failure_is_repairable(exc)
-            )
+            repair_allowed = not state.get(
+                "repair_used", False
+            ) and execution_failure_is_repairable(exc)
             state["recorder"].record_step(
                 "query_execution",
                 "error",
@@ -1127,6 +1128,21 @@ def _route_after_execution(state: AskDataGraphState) -> str:
 def _agent_result_from_state(state: AskDataGraphState, trace: RunTrace) -> AskDataResult:
     intent_decision = state.get("intent_decision")
     query_result = state.get("query_result")
+    metric_resolution = state.get("metric_resolution")
+    is_clarification = state["status"] == "clarification_required"
+    clarification_question = None
+    candidates = []
+    if is_clarification:
+        clarification_question = (
+            metric_resolution.clarification_question
+            if metric_resolution is not None
+            and metric_resolution.status == "clarification_required"
+            else intent_decision.reason
+            if intent_decision is not None
+            else state["answer"]
+        )
+        if metric_resolution is not None:
+            candidates = clarification_candidates(metric_resolution)
     return AskDataResult(
         request_id=state["request"].request_id,
         question=state["request"].question,
@@ -1146,6 +1162,8 @@ def _agent_result_from_state(state: AskDataGraphState, trace: RunTrace) -> AskDa
         validation_status=state.get("validation_status"),
         policy_code=state.get("policy_code"),
         policy_reason=state.get("policy_reason"),
+        clarification_question=clarification_question,
+        clarification_candidates=candidates,
     )
 
 

@@ -106,6 +106,72 @@ def test_ask_data_graph_success_runs_all_major_stages() -> None:
     assert query_tool.calls
 
 
+@pytest.mark.parametrize(
+    "question",
+    [
+        "List all the names of the customer.",
+        (
+            "Original question: List all the names of the customer.\n"
+            "User clarification: I need the names of all the customers."
+        ),
+    ],
+)
+def test_customer_name_projection_reaches_guarded_query_workflow(question: str) -> None:
+    rows = [
+        {"name": "Aarav Mehta"},
+        {"name": "Ishaan Kapoor"},
+        {"name": "Kabir Iyer"},
+        {"name": "Leela Menon"},
+        {"name": "Maya Rao"},
+        {"name": "Nisha Shah"},
+    ]
+    llm = StubLLM("SELECT name FROM customers ORDER BY name LIMIT 100")
+    query_tool = StubQueryTool(rows)
+    graph = AskDataGraph(llm_resolver=lambda: llm, query_tool=query_tool)  # type: ignore[arg-type]
+
+    result = asyncio.run(graph.run(question))
+
+    assert result.status == "ok"
+    assert result.intent_policy_code == "allowed_bounded_projection"
+    assert result.rows == rows
+    assert result.row_count == 6
+    assert llm.calls
+    assert query_tool.calls
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Show me what are the orders placed by all the unique customers.",
+        (
+            "Original question: Show me what are the orders placed by all the unique customers.\n"
+            "User clarification: Show each unique customer and the orders they placed."
+        ),
+    ],
+)
+def test_customer_order_projection_reaches_guarded_query_workflow(question: str) -> None:
+    rows = [
+        {"customer_name": "Aarav Mehta", "order_id": 1},
+        {"customer_name": "Aarav Mehta", "order_id": 2},
+        {"customer_name": "Maya Rao", "order_id": 3},
+    ]
+    llm = StubLLM(
+        "SELECT c.name AS customer_name, o.id AS order_id "
+        "FROM customers AS c JOIN orders AS o ON o.customer_id = c.id "
+        "ORDER BY c.name, o.id LIMIT 100"
+    )
+    query_tool = StubQueryTool(rows)
+    graph = AskDataGraph(llm_resolver=lambda: llm, query_tool=query_tool)  # type: ignore[arg-type]
+
+    result = asyncio.run(graph.run(question))
+
+    assert result.status == "ok"
+    assert result.intent_policy_code == "allowed_bounded_projection"
+    assert result.rows == rows
+    assert llm.calls
+    assert query_tool.calls
+
+
 def test_ask_data_graph_uses_same_session_memory_in_context() -> None:
     llm = StubLLM("SELECT COUNT(*) AS order_count FROM orders")
     query_tool = StubQueryTool()

@@ -10,9 +10,7 @@ from queryforge.tools import QueryExecutorTool
 
 
 def _approve(sql: str) -> ApprovedQuery:
-    approved, decision = approve_sql_candidate(
-        SQLCandidate(sql=sql, provider="test", model="test")
-    )
+    approved, decision = approve_sql_candidate(SQLCandidate(sql=sql, provider="test", model="test"))
     assert decision.status == "allowed"
     assert approved is not None
     return approved

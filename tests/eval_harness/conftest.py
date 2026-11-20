@@ -24,4 +24,3 @@ def runner_environment(monkeypatch, tmp_path):
     monkeypatch.setattr(evals, "database_content_digest", lambda url: "stable")
     monkeypatch.setattr(evals, "QueryExecutorTool", lambda url: FakeExecutor())
     return path
-

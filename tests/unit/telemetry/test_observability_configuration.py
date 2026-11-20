@@ -43,8 +43,7 @@ def test_load_observability_config_keeps_partial_langfuse_disabled(
 ) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "QUERYFORGE_OBSERVABILITY_PROVIDER=langfuse\n"
-        "LANGFUSE_PUBLIC_KEY=pk-live-public",
+        "QUERYFORGE_OBSERVABILITY_PROVIDER=langfuse\nLANGFUSE_PUBLIC_KEY=pk-live-public",
         encoding="utf-8",
     )
 
@@ -139,8 +138,7 @@ def test_create_trace_exporter_returns_noop_for_partial_langfuse_config(
 ) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "QUERYFORGE_OBSERVABILITY_PROVIDER=langfuse\n"
-        "LANGFUSE_PUBLIC_KEY=pk-live-public",
+        "QUERYFORGE_OBSERVABILITY_PROVIDER=langfuse\nLANGFUSE_PUBLIC_KEY=pk-live-public",
         encoding="utf-8",
     )
     config = load_observability_config(env_file)

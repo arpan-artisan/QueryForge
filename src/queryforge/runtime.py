@@ -37,5 +37,7 @@ class AskDataRuntime:
         )
 
     async def run(self, request: AgentRequest | str) -> AskDataResult:
-        agent_request = request if isinstance(request, AgentRequest) else AgentRequest(question=request)
+        agent_request = (
+            request if isinstance(request, AgentRequest) else AgentRequest(question=request)
+        )
         return await self._graph.run(agent_request)

@@ -8,6 +8,46 @@ class MetricDefinition:
     definition: str
 
 
+@dataclass(frozen=True, slots=True)
+class SchemaColumn:
+    name: str
+    data_type: str
+    description: str | None = None
+
+    def prompt_line(self) -> str:
+        suffix = f" {self.description}" if self.description else ""
+        return f"- {self.name} {self.data_type}{suffix}"
+
+
+@dataclass(frozen=True, slots=True)
+class SchemaTable:
+    name: str
+    description: str
+    grain: str
+    columns: tuple[SchemaColumn, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SchemaRelationship:
+    source_table: str
+    source_column: str
+    target_table: str
+    target_column: str
+
+    def prompt_line(self) -> str:
+        return (
+            f"- {self.source_table}.{self.source_column} -> "
+            f"{self.target_table}.{self.target_column}"
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SchemaCatalog:
+    schema_name: str
+    tables: tuple[SchemaTable, ...]
+    relationships: tuple[SchemaRelationship, ...]
+
+
 REVENUE_METRIC_DEFINITIONS = (
     MetricDefinition(
         metric_id="completed_revenue",
@@ -37,77 +77,131 @@ REVENUE_METRIC_DEFINITIONS = (
     ),
 )
 
-_REVENUE_METRIC_CONTEXT = "\n".join(
-    f"- {metric.display_name} means {metric.definition}"
-    for metric in REVENUE_METRIC_DEFINITIONS
+
+APPROVED_SCHEMA_CATALOG = SchemaCatalog(
+    schema_name="public",
+    tables=(
+        SchemaTable(
+            name="customers",
+            description="Customer accounts with approved regional and segment attributes.",
+            grain="one row per customer",
+            columns=(
+                SchemaColumn("id", "integer", "primary key"),
+                SchemaColumn("name", "text"),
+                SchemaColumn("created_at", "date"),
+                SchemaColumn("region", "text", "North, South, East, West"),
+                SchemaColumn("segment", "text", "Consumer, Business"),
+            ),
+        ),
+        SchemaTable(
+            name="categories",
+            description="Product category reference data.",
+            grain="one row per product category",
+            columns=(
+                SchemaColumn("id", "integer", "primary key"),
+                SchemaColumn("name", "text"),
+                SchemaColumn("description", "text"),
+            ),
+        ),
+        SchemaTable(
+            name="products",
+            description="Product catalog entries and current catalog prices.",
+            grain="one row per product, linked to one category",
+            columns=(
+                SchemaColumn("id", "integer", "primary key"),
+                SchemaColumn("category_id", "integer", "references categories.id"),
+                SchemaColumn("name", "text"),
+                SchemaColumn("sku", "text"),
+                SchemaColumn("unit_price", "numeric", "current catalog price"),
+                SchemaColumn("active", "boolean"),
+            ),
+        ),
+        SchemaTable(
+            name="orders",
+            description="Customer orders with lifecycle status and sales channel.",
+            grain="one row per customer order",
+            columns=(
+                SchemaColumn("id", "integer", "primary key"),
+                SchemaColumn("customer_id", "integer", "references customers.id"),
+                SchemaColumn("order_date", "date"),
+                SchemaColumn("status", "text", "completed, refunded, pending, cancelled"),
+                SchemaColumn("channel", "text", "web, retail, partner"),
+            ),
+        ),
+        SchemaTable(
+            name="order_items",
+            description="Purchase-time product line items belonging to orders.",
+            grain="one row per product line item in an order",
+            columns=(
+                SchemaColumn("id", "integer", "primary key"),
+                SchemaColumn("order_id", "integer", "references orders.id"),
+                SchemaColumn("product_id", "integer", "references products.id"),
+                SchemaColumn("quantity", "integer"),
+                SchemaColumn("unit_price", "numeric", "purchase-time line-item price"),
+            ),
+        ),
+        SchemaTable(
+            name="payments",
+            description="Payment attempts and their outcomes for orders.",
+            grain="one row per payment attempt for an order",
+            columns=(
+                SchemaColumn("id", "integer", "primary key"),
+                SchemaColumn("order_id", "integer", "references orders.id"),
+                SchemaColumn("payment_date", "date"),
+                SchemaColumn("amount", "numeric"),
+                SchemaColumn("method", "text", "card, upi, wallet"),
+                SchemaColumn("status", "text", "succeeded, failed, pending"),
+            ),
+        ),
+        SchemaTable(
+            name="refunds",
+            description="Refund events issued against orders.",
+            grain="one row per refund event for an order",
+            columns=(
+                SchemaColumn("id", "integer", "primary key"),
+                SchemaColumn("order_id", "integer", "references orders.id"),
+                SchemaColumn("refund_date", "date"),
+                SchemaColumn("amount", "numeric"),
+                SchemaColumn("reason", "text"),
+            ),
+        ),
+    ),
+    relationships=(
+        SchemaRelationship("products", "category_id", "categories", "id"),
+        SchemaRelationship("orders", "customer_id", "customers", "id"),
+        SchemaRelationship("order_items", "order_id", "orders", "id"),
+        SchemaRelationship("order_items", "product_id", "products", "id"),
+        SchemaRelationship("payments", "order_id", "orders", "id"),
+        SchemaRelationship("refunds", "order_id", "orders", "id"),
+    ),
 )
 
-SCHEMA_CONTEXT = f"""
+
+def render_schema_context(catalog: SchemaCatalog = APPROVED_SCHEMA_CATALOG) -> str:
+    tables = "\n\n".join(
+        f"{table.name}: {table.grain}\n"
+        + "\n".join(column.prompt_line() for column in table.columns)
+        for table in catalog.tables
+    )
+    relationships = "\n".join(item.prompt_line() for item in catalog.relationships)
+    revenue_metrics = "\n".join(
+        f"- {metric.display_name} means {metric.definition}"
+        for metric in REVENUE_METRIC_DEFINITIONS
+    )
+    return f"""
 You can query this PostgreSQL ecommerce demo schema.
 
-Schema: public
+Schema: {catalog.schema_name}
 
 Tables and grains:
 
-customers: one row per customer
-- id integer primary key
-- name text
-- created_at date
-- region text: North, South, East, West
-- segment text: Consumer, Business
-
-categories: one row per product category
-- id integer primary key
-- name text
-- description text
-
-products: one row per product, linked to one category
-- id integer primary key
-- category_id integer references categories.id
-- name text
-- sku text
-- unit_price numeric current catalog price
-- active boolean
-
-orders: one row per customer order
-- id integer primary key
-- customer_id integer references customers.id
-- order_date date
-- status text: completed, refunded, pending, cancelled
-- channel text: web, retail, partner
-
-order_items: one row per product line item in an order
-- id integer primary key
-- order_id integer references orders.id
-- product_id integer references products.id
-- quantity integer
-- unit_price numeric purchase-time line-item price
-
-payments: one row per payment attempt for an order
-- id integer primary key
-- order_id integer references orders.id
-- payment_date date
-- amount numeric
-- method text: card, upi, wallet
-- status text: succeeded, failed, pending
-
-refunds: one row per refund event for an order
-- id integer primary key
-- order_id integer references orders.id
-- refund_date date
-- amount numeric
-- reason text
+{tables}
 
 Relationships:
-- products.category_id -> categories.id
-- orders.customer_id -> customers.id
-- order_items.order_id -> orders.id
-- order_items.product_id -> products.id
-- payments.order_id -> orders.id
-- refunds.order_id -> orders.id
+{relationships}
 
 Metric definitions:
-{_REVENUE_METRIC_CONTEXT}
+{revenue_metrics}
 - Completed order count means COUNT(*) from orders where orders.status = 'completed'.
 - Average order value means completed revenue divided by completed order count.
 - Refund rate means refund amount divided by gross revenue, expressed as a percentage.
@@ -120,3 +214,6 @@ Rules:
 - Do not use customer email or any raw personal data.
 - Return exactly one SELECT statement.
 """.strip()
+
+
+SCHEMA_CONTEXT = render_schema_context()

@@ -2,12 +2,12 @@
 
 This is the living diagram page for QueryForge. Update it whenever an OpenSpec change alters the user flow, module boundaries, core classes, result models, statuses, setup steps, or execution path.
 
-Current scope: local CLI Ask Data flow for a stabilized seven-table Postgres
-demo database with required memory read/write workflow boundaries, process-local
-session memory, LangGraph orchestration, one bounded SQL repair attempt, bounded
-local traces, structured provider failure handling, optional Langfuse export,
-execution-time demo database readiness checks, and reference/live evaluation
-commands.
+Current scope: local CLI and build-free browser Ask Data flows for a stabilized
+seven-table Postgres demo database with required memory read/write workflow
+boundaries, process-local CLI session memory, LangGraph orchestration, one
+bounded SQL repair attempt, bounded local traces, structured provider failure
+handling, optional Langfuse export, execution-time demo database readiness
+checks, and reference/live evaluation commands.
 
 ## Demo Schema
 
@@ -223,6 +223,46 @@ flowchart TD
 
     result --> json["Print AskDataResult-compatible JSON"]
 ```
+
+## Local Browser Flow
+
+The browser is a thin, stateless adapter over the same runtime. It cannot accept
+SQL or call the query executor directly. The response model exposes only the
+fields needed by the page and deliberately omits the full trace, prompts,
+provider internals, raw exceptions, and credentials.
+
+```mermaid
+flowchart TD
+    browser["Browser: one question form"] --> ask_api["POST /api/ask<br/>BrowserAskRequest"]
+    ask_api --> ui_request["AgentRequest(question, source=ui, no session)"]
+    ui_request --> runtime["Existing AskDataRuntime"]
+    runtime --> graph["Existing AskDataGraph trust boundary"]
+    graph --> intent["Intent policy + semantic metric resolution"]
+    intent -- clarification required --> clarify_result["AskDataResult with validated question and candidates; no SQL/rows"]
+    clarify_result --> safe_response["Allowlisted BrowserAskResponse"]
+    safe_response --> clarify_ui["Suggestion buttons + free-text explanation"]
+    clarify_ui --> explicit_question["Original question + explicit user clarification"]
+    explicit_question --> ask_api
+    intent -- allowed --> generation["LLM suggests candidate SQL"]
+    generation --> validation["SQL validation + ApprovedQuery"]
+    validation --> readonly["Read-only bounded Postgres execution"]
+    readonly --> answer["Answer rendering + bounded rows + trace identity"]
+    answer --> safe_response
+    safe_response --> page["Separate answer and scrollable SQL-result panels"]
+
+    schema_ui["Schema dropdown"] --> schema_api["GET /api/schema"]
+    schema_api --> catalog["APPROVED_SCHEMA_CATALOG"]
+    catalog --> schema_ui
+    catalog --> prompt["render_schema_context()"]
+    prompt --> graph
+```
+
+The approved schema catalog is the single structured source for browser table
+metadata and LLM schema prose. It contains only the seven query-approved tables,
+approved columns, descriptions, grains, and relationships; the endpoint does
+not inspect Postgres catalogs. Browser input, clarification text, and LLM output
+remain untrusted. Only QueryForge policy and `ApprovedQuery` can authorize the
+read-only executor.
 
 ## Class Diagram
 

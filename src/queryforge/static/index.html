@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Ask questions of the QueryForge demo database." />
+    <title>QueryForge Ask Data</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script src="/static/app.js" type="module"></script>
+  </head>
+  <body>
+    <header class="app-header">
+      <div>
+        <p class="eyebrow">QueryForge</p>
+        <h1>Ask Data</h1>
+      </div>
+      <p class="header-note">Local demo database · guarded read-only queries</p>
+    </header>
+
+    <form id="question-form" class="question-form" novalidate>
+      <label for="question">Ask a question about your data</label>
+      <div class="question-controls">
+        <input
+          id="question"
+          name="question"
+          type="text"
+          maxlength="2000"
+          autocomplete="off"
+          placeholder="For example: Show completed revenue by month"
+          required
+        />
+        <button id="ask-button" type="submit">Ask</button>
+      </div>
+      <p id="form-message" class="form-message" role="alert"></p>
+    </form>
+
+    <main class="workspace">
+      <section class="results" aria-label="Ask Data result">
+        <article class="panel answer-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="panel-kicker">LLM output</p>
+              <h2>Answer</h2>
+            </div>
+            <span id="status-badge" class="status-badge" data-status="initial">Ready</span>
+          </div>
+          <div id="answer" class="answer" aria-live="polite">
+            Ask a question to see a grounded answer.
+          </div>
+          <p id="trace-id" class="trace-id" hidden></p>
+
+          <section id="clarification" class="clarification" hidden>
+            <h3 id="clarification-question">Please clarify your request</h3>
+            <div id="clarification-options" class="clarification-options"></div>
+            <form id="clarification-form" class="clarification-form">
+              <label for="clarification-text">Or explain what you meant</label>
+              <div class="clarification-controls">
+                <input
+                  id="clarification-text"
+                  type="text"
+                  maxlength="1000"
+                  autocomplete="off"
+                  placeholder="Describe the metric or scope you intended"
+                />
+                <button type="submit" class="secondary-button">Submit clarification</button>
+              </div>
+              <p id="clarification-message" class="form-message" role="alert"></p>
+            </form>
+          </section>
+        </article>
+
+        <article class="panel sql-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="panel-kicker">SQL result</p>
+              <h2>Query and rows</h2>
+            </div>
+            <span id="row-count" class="row-count">0 rows</span>
+          </div>
+          <div class="sql-block">
+            <span class="subheading">Generated SQL</span>
+            <pre id="sql">No approved query yet.</pre>
+          </div>
+          <div id="table-container" class="table-container" tabindex="0" aria-label="Query rows">
+            <p id="rows-empty" class="empty-state">Returned rows will appear here.</p>
+            <table id="rows-table" hidden>
+              <thead></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+
+      <aside class="panel schema-panel" aria-labelledby="schema-heading">
+        <div class="panel-heading">
+          <div>
+            <p class="panel-kicker">Approved context</p>
+            <h2 id="schema-heading">Tables</h2>
+          </div>
+        </div>
+        <label for="table-select">Choose a table</label>
+        <select id="table-select" disabled>
+          <option>Loading schema…</option>
+        </select>
+        <div id="schema-error" class="schema-error" hidden>
+          <p>Schema details could not be loaded.</p>
+          <button id="retry-schema" type="button" class="secondary-button">Retry</button>
+        </div>
+        <div id="schema-details" class="schema-details" hidden>
+          <h3 id="table-name"></h3>
+          <p id="table-description"></p>
+          <dl>
+            <div>
+              <dt>Grain</dt>
+              <dd id="table-grain"></dd>
+            </div>
+          </dl>
+          <h4>Columns</h4>
+          <ul id="column-list" class="column-list"></ul>
+          <h4>Relationships</h4>
+          <ul id="relationship-list" class="relationship-list"></ul>
+        </div>
+      </aside>
+    </main>
+  </body>
+</html>

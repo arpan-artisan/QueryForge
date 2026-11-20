@@ -70,9 +70,11 @@ class AgentRequest(BaseModel):
     source: Literal["cli", "eval", "api", "ui"] = "cli"
     session_id: str | None = None
 
+
 class QueryContext(BaseModel):
     schema_text: str
     examples: list[str] = Field(default_factory=list)
+
 
 class SQLCandidate(BaseModel):
     sql: str
@@ -80,19 +82,23 @@ class SQLCandidate(BaseModel):
     model: str
     attempt: int = 1
 
+
 class PolicyDecision(BaseModel):
     status: Literal["allowed", "blocked", "unsupported", "invalid", "clarification_required"]
     code: str
     reason: str
 
+
 class ApprovedQuery(BaseModel):
     sql: str
     decision: PolicyDecision
+
 
 class QueryResult(BaseModel):
     sql: str
     rows: list[dict[str, Any]]
     row_count: int
+
 
 class AskDataResult(BaseModel):
     request_id: str

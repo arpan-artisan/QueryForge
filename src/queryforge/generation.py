@@ -56,6 +56,8 @@ def _generation_context(
         f"- display_name: {metric.display_name}\n"
         f"- definition: {metric.definition}"
     )
+
+
 def _repair_question(
     question: str,
     failed_sql: str,

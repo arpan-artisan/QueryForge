@@ -7,6 +7,7 @@ from pydantic import ValidationError
 from queryforge.llm import LLMProvider
 from queryforge.models import (
     AgentRequest,
+    ClarificationCandidate,
     MetricResolutionCandidate,
     MetricResolutionDecision,
     QueryContext,
@@ -107,3 +108,15 @@ def resolved_metric_definition(
         for metric in REVENUE_METRIC_DEFINITIONS
         if metric.metric_id == decision.resolved_metric_id
     )
+
+
+def clarification_candidates(
+    decision: MetricResolutionDecision,
+) -> list[ClarificationCandidate]:
+    if decision.status != "clarification_required":
+        return []
+    definitions = {metric.metric_id: metric for metric in REVENUE_METRIC_DEFINITIONS}
+    return [
+        ClarificationCandidate(id=metric_id, label=definitions[metric_id].display_name)
+        for metric_id in decision.candidate_metric_ids
+    ]

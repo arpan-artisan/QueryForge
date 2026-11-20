@@ -209,10 +209,7 @@ def _validate_join_shapes(expression: exp.Select, original_sql: str) -> SQLPolic
                 and joined_table is not None
                 and _is_approved_base_table(left_table)
                 and _is_approved_base_table(joined_table)
-                and (
-                    is_cross_join
-                    or not has_condition
-                )
+                and (is_cross_join or not has_condition)
             ):
                 return _blocked(
                     "cross_join_not_allowed",
@@ -258,7 +255,9 @@ def _direct_from_table(select: exp.Select) -> exp.Table | None:
 def _is_approved_base_table(table: exp.Table) -> bool:
     table_name = _normalize_identifier(table.this)
     schema_name = _normalize_identifier(table.args.get("db"))
-    return (not schema_name or schema_name == APPROVED_SCHEMA_NAME) and is_approved_table(table_name)
+    return (not schema_name or schema_name == APPROVED_SCHEMA_NAME) and is_approved_table(
+        table_name
+    )
 
 
 def _validate_stars(expression: exp.Expression, original_sql: str) -> SQLPolicyDecision | None:

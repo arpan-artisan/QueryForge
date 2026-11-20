@@ -274,8 +274,8 @@ ADMINISTRATIVE_PATTERNS = (
 RESOURCE_ABUSE_PATTERNS = (
     r"\bshow\s+everything\b",
     r"\blist\s+everything\b",
-    r"\bshow\s+all\s+(rows?|records?|orders?|customers?|products?|payments?|refunds?|tables?)\b",
-    r"\blist\s+all\s+(rows?|records?|orders?|customers?|products?|payments?|refunds?|tables?)\b",
+    r"\bshow\s+all\s+(rows?|records?|orders?|customers?(?!['’]?\s+names?\b)|products?|payments?|refunds?|tables?)\b",
+    r"\blist\s+all\s+(rows?|records?|orders?|customers?(?!['’]?\s+names?\b)|products?|payments?|refunds?|tables?)\b",
     r"\b(all|entire|whole)\s+(database|table|dataset)\b",
     r"\bdump\s+(database|table|all|everything)\b",
     r"\bno\s+limit\b",
@@ -479,6 +479,13 @@ def _clarification_decision(normalized: str) -> IntentPolicyDecision | None:
 
 
 def _allowed_decision(normalized: str) -> IntentPolicyDecision | None:
+    if _is_safe_approved_projection(normalized):
+        return _decision(
+            "allowed",
+            "allowed_analytical",
+            "allowed_bounded_projection",
+            "The request selects approved attributes or relationships and remains bounded by query limits.",
+        )
     if _is_bounded_lookup(normalized):
         return _decision(
             "allowed",
@@ -591,6 +598,27 @@ def _is_bounded_lookup(normalized: str) -> bool:
     return _matches_any(
         normalized,
         (r"\bfor\s+(customer|product|category|status|payment method|channel)\s+[\w'-]+\b",),
+    )
+
+
+def _is_safe_approved_projection(normalized: str) -> bool:
+    customer_names = _contains_any(normalized, ("customer", "customers")) and _contains_any(
+        normalized, ("name", "names")
+    )
+    customer_orders = (
+        _contains_any(normalized, ("customer", "customers"))
+        and _contains_any(normalized, ("order", "orders"))
+        and _matches_any(
+            normalized,
+            (
+                r"\borders?\s+placed\s+by\b",
+                r"\bcustomers?\b.*\borders?\s+(they\s+)?placed\b",
+            ),
+        )
+    )
+    return (customer_names or customer_orders) and _matches_any(
+        normalized,
+        (r"\b(list|show|display|get|give me|need|want|what are)\b",),
     )
 
 

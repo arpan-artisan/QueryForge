@@ -1,6 +1,6 @@
 # QueryForge
 
-QueryForge is an early CLI-first data-agent project.
+QueryForge is an early local data-agent project with CLI and browser interfaces.
 
 The long-term product direction has two tools:
 
@@ -9,7 +9,7 @@ The long-term product direction has two tools:
 
 Both tools should eventually share the same foundation for LLM providers, database access, schema context, SQL validation, query execution, traces, evals, memory, adapters, and governance.
 
-Current scope is intentionally smaller: a local Ask Data NL2SQL CLI backed by Postgres.
+Current scope is intentionally smaller: local Ask Data NL2SQL interfaces backed by Postgres.
 Memory is now part of the Ask Data workflow boundary, but the first
 implementation is process-local session memory only.
 
@@ -17,8 +17,8 @@ implementation is process-local session memory only.
 question -> AskDataRuntime -> LangGraph AskDataGraph -> memory read -> intent policy -> context builder -> LLM provider -> SQLCandidate -> SQL approval -> optional one-shot repair -> ApprovedQuery -> read-only Postgres executor -> answer -> memory write -> trace + result JSON
 ```
 
-There is no frontend, public API, dashboard generation, persistent memory,
-embeddings, vector retrieval, multi-database support, or governance system yet.
+There is no public API, dashboard generation, persistent memory, embeddings,
+vector retrieval, multi-database support, or governance system yet.
 
 ## Local Setup
 
@@ -30,6 +30,7 @@ uv run queryforge init-db
 uv run queryforge check-db
 uv run queryforge ask "What is total revenue?"
 uv run queryforge chat --session local-demo
+uv run queryforge web
 ```
 
 Set your Groq key in `.env` before running `ask`:
@@ -55,6 +56,34 @@ Shell environment variables still work and take precedence over `.env`:
 $env:GROQ_API_KEY = "your-groq-api-key"
 $env:QUERYFORGE_LLM_MODEL = "openai/gpt-oss-20b"
 ```
+
+## Local Ask Data Web MVP
+
+After completing the setup above, start the build-free browser interface:
+
+```powershell
+uv run queryforge check-db
+uv run queryforge web
+```
+
+Open `http://127.0.0.1:8000`. To use another loopback port:
+
+```powershell
+uv run queryforge web --port 8123
+```
+
+The page provides one question bar, a separate grounded answer, generated SQL
+and bounded scrollable rows, and a dropdown for the seven approved demo tables.
+If QueryForge needs clarification, the page shows governed suggestions and a
+free-text explanation field; either choice is resubmitted as untrusted natural
+language through the same intent, semantic-resolution, SQL-validation,
+approval, and read-only execution workflow.
+
+The web command is local-only and binds to `127.0.0.1`. It is an MVP interface,
+not a supported public API or production server. It has no authentication,
+saved sessions, chat history, browser storage, streaming, exports, arbitrary
+SQL input, database introspection, or full-result download. A page reload clears
+the visible request.
 
 ## Demo Database Lifecycle
 

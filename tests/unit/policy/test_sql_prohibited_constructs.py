@@ -112,9 +112,7 @@ def test_blocks_data_modifying_ctes(sql: str) -> None:
 
 
 def test_blocks_recursive_ctes() -> None:
-    decision = evaluate_sql_policy(
-        "WITH RECURSIVE x AS (SELECT id FROM orders) SELECT id FROM x"
-    )
+    decision = evaluate_sql_policy("WITH RECURSIVE x AS (SELECT id FROM orders) SELECT id FROM x")
 
     assert decision.status == "blocked"
     assert decision.code == "recursive_cte_not_allowed"

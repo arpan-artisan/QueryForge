@@ -29,9 +29,7 @@ class StubLLM:
         self.calls.append((question, schema_context))
         return self.sql
 
-    async def resolve_metric(
-        self, question: str, schema_context: str, metric_catalog: str
-    ) -> str:
+    async def resolve_metric(self, question: str, schema_context: str, metric_catalog: str) -> str:
         return NOT_APPLICABLE_RESOLUTION
 
 
@@ -39,9 +37,7 @@ class FailingLLM:
     provider_name = "stub"
     model_name = "cli-test"
 
-    async def resolve_metric(
-        self, question: str, schema_context: str, metric_catalog: str
-    ) -> str:
+    async def resolve_metric(self, question: str, schema_context: str, metric_catalog: str) -> str:
         return NOT_APPLICABLE_RESOLUTION
 
     async def generate_sql(self, question: str, schema_context: str) -> str:
@@ -187,7 +183,9 @@ def test_ask_command_prints_unsupported_intent_json_without_provider(monkeypatch
     assert _step(payload, "query_execution")["status"] == "skipped"
 
 
-def test_ask_command_prints_clarification_required_json_without_provider(monkeypatch, capsys) -> None:
+def test_ask_command_prints_clarification_required_json_without_provider(
+    monkeypatch, capsys
+) -> None:
     monkeypatch.setattr(cli, "create_llm_provider", _provider_factory_that_should_not_be_called)
     monkeypatch.setattr(cli, "QueryExecutorTool", lambda: StubQueryTool())
 
@@ -202,6 +200,8 @@ def test_ask_command_prints_clarification_required_json_without_provider(monkeyp
     assert payload["intent_policy_code"] == "clarify_broad_show_data"
     assert payload["sql"] is None
     assert payload["rows"] == []
+    assert payload["clarification_question"]
+    assert payload["clarification_candidates"] == []
     assert "Clarification required" in payload["answer"]
     assert _step(payload, "intent_policy")["status"] == "clarification_required"
     assert _step(payload, "query_execution")["status"] == "skipped"
@@ -269,6 +269,23 @@ def test_ask_command_prints_invalid_sql_json_with_validation_details(monkeypatch
     assert _step(payload, "llm_sql_generation")["metadata"]["generated_sql"] == "SELECT FROM"
     assert _step(payload, "sql_validation")["status"] == "invalid"
     assert _step(payload, "query_execution")["status"] == "skipped"
+
+
+def test_web_command_starts_loopback_app_without_changing_ask_runtime(monkeypatch) -> None:
+    runtime = object()
+    seen = {}
+    monkeypatch.setattr(cli, "_runtime", lambda: runtime)
+    monkeypatch.setattr("queryforge.web.create_app", lambda value: ("app", value))
+    monkeypatch.setattr(
+        cli.uvicorn,
+        "run",
+        lambda app, host, port: seen.update(app=app, host=host, port=port),
+    )
+    monkeypatch.setattr("sys.argv", ["queryforge", "web", "--port", "8123"])
+
+    cli.main()
+
+    assert seen == {"app": ("app", runtime), "host": "127.0.0.1", "port": 8123}
 
 
 def test_check_db_command_prints_ready_json(monkeypatch, capsys) -> None:

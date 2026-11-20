@@ -29,6 +29,28 @@ from queryforge.models import AskDataResult, IntentPolicyDecision
         ("Look up order number 3", "allowed_bounded_lookup"),
         ("Show revenue for customer Alice", "allowed_bounded_lookup"),
         ("For customer Alice, show order count", "allowed_bounded_lookup"),
+        ("List all the names of the customer.", "allowed_bounded_projection"),
+        ("List all customer names.", "allowed_bounded_projection"),
+        ("Show all customers' names.", "allowed_bounded_projection"),
+        (
+            "Show me what are the orders placed by all the unique customers.",
+            "allowed_bounded_projection",
+        ),
+        (
+            (
+                "Original question: Show me what are the orders placed by all the unique "
+                "customers. User clarification: Show each unique customer and the orders "
+                "they placed."
+            ),
+            "allowed_bounded_projection",
+        ),
+        (
+            (
+                "Original question: List all the names of the customer. "
+                "User clarification: I need the names of all the customers."
+            ),
+            "allowed_bounded_projection",
+        ),
     ],
 )
 def test_allows_analytical_intents(question: str, code: str) -> None:
@@ -204,6 +226,20 @@ def test_blocks_resource_abuse_intents(question: str) -> None:
     assert decision.status == "blocked"
     assert decision.category == "resource_abuse"
     assert decision.code == "blocked_resource_abuse"
+
+
+def test_customer_name_projection_does_not_weaken_broad_customer_dump_policy() -> None:
+    decision = evaluate_intent_policy("List all customers")
+
+    assert decision.status == "blocked"
+    assert decision.code == "blocked_resource_abuse"
+
+
+@pytest.mark.parametrize("question", ["Show orders", "List all orders"])
+def test_customer_order_projection_does_not_allow_generic_order_dumps(question: str) -> None:
+    decision = evaluate_intent_policy(question)
+
+    assert decision.status in {"blocked", "clarification_required"}
 
 
 def test_blocks_policy_conflict_intent() -> None:

@@ -105,6 +105,8 @@ def test_ask_data_graph_clarification_skips_llm_and_database() -> None:
     result = asyncio.run(graph.run("Show data"))
 
     assert result.status == "clarification_required"
+    assert result.clarification_question
+    assert result.clarification_candidates == []
     assert resolver_calls == 0
     assert query_tool.calls == []
     assert result.trace is not None
@@ -132,6 +134,12 @@ def test_ambiguous_revenue_stops_before_sql_generation_and_execution() -> None:
     assert result.sql is None
     assert result.rows == []
     assert result.row_count == 0
+    assert result.clarification_question == "Do you mean completed, gross, or net revenue?"
+    assert [candidate.model_dump() for candidate in result.clarification_candidates] == [
+        {"id": "completed_revenue", "label": "Completed revenue"},
+        {"id": "gross_revenue", "label": "Gross revenue"},
+        {"id": "net_revenue", "label": "Net revenue"},
+    ]
     assert len(llm.resolution_calls) == 1
     assert llm.calls == []
     assert query_tool.calls == []

@@ -127,27 +127,34 @@ def test_initialized_demo_database_matches_expected_analytics_facts() -> None:
         autocommit=True,
         row_factory=dict_row,
     ) as conn:
-        assert _fetch_money(
-            conn,
-            """
+        assert (
+            _fetch_money(
+                conn,
+                """
             SELECT SUM(oi.quantity * oi.unit_price) AS value
             FROM orders o
             JOIN order_items oi ON oi.order_id = o.id
             WHERE o.status = 'completed'
             """,
-        ) == EXPECTED_FACTS["completed_revenue"]
-        assert _fetch_money(
-            conn,
-            """
+            )
+            == EXPECTED_FACTS["completed_revenue"]
+        )
+        assert (
+            _fetch_money(
+                conn,
+                """
             SELECT SUM(oi.quantity * oi.unit_price) AS value
             FROM orders o
             JOIN order_items oi ON oi.order_id = o.id
             WHERE o.status IN ('completed', 'refunded')
             """,
-        ) == EXPECTED_FACTS["gross_revenue"]
-        assert _fetch_money(
-            conn,
-            """
+            )
+            == EXPECTED_FACTS["gross_revenue"]
+        )
+        assert (
+            _fetch_money(
+                conn,
+                """
             SELECT gross.value - refund.value AS value
             FROM (
                 SELECT SUM(oi.quantity * oi.unit_price) AS value
@@ -160,13 +167,19 @@ def test_initialized_demo_database_matches_expected_analytics_facts() -> None:
                 FROM refunds
             ) refund
             """,
-        ) == EXPECTED_FACTS["net_revenue"]
-        assert conn.execute(
-            "SELECT COUNT(*) AS value FROM orders WHERE status = 'completed'"
-        ).fetchone()["value"] == EXPECTED_FACTS["completed_order_count"]
-        assert _fetch_money(
-            conn,
-            """
+            )
+            == EXPECTED_FACTS["net_revenue"]
+        )
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) AS value FROM orders WHERE status = 'completed'"
+            ).fetchone()["value"]
+            == EXPECTED_FACTS["completed_order_count"]
+        )
+        assert (
+            _fetch_money(
+                conn,
+                """
             WITH completed_orders AS (
                 SELECT o.id, SUM(oi.quantity * oi.unit_price) AS revenue
                 FROM orders o
@@ -177,14 +190,20 @@ def test_initialized_demo_database_matches_expected_analytics_facts() -> None:
             SELECT AVG(revenue) AS value
             FROM completed_orders
             """,
-        ) == EXPECTED_FACTS["average_order_value"]
-        assert _fetch_money(
-            conn,
-            "SELECT SUM(amount) AS value FROM refunds",
-        ) == EXPECTED_FACTS["refund_amount"]
-        assert _fetch_money(
-            conn,
-            """
+            )
+            == EXPECTED_FACTS["average_order_value"]
+        )
+        assert (
+            _fetch_money(
+                conn,
+                "SELECT SUM(amount) AS value FROM refunds",
+            )
+            == EXPECTED_FACTS["refund_amount"]
+        )
+        assert (
+            _fetch_money(
+                conn,
+                """
             SELECT refund.value / gross.value * 100 AS value
             FROM (
                 SELECT SUM(oi.quantity * oi.unit_price) AS value
@@ -197,17 +216,23 @@ def test_initialized_demo_database_matches_expected_analytics_facts() -> None:
                 FROM refunds
             ) refund
             """,
-        ) == EXPECTED_FACTS["refund_rate"]
-        assert _fetch_money(
-            conn,
-            """
+            )
+            == EXPECTED_FACTS["refund_rate"]
+        )
+        assert (
+            _fetch_money(
+                conn,
+                """
             SELECT AVG(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) * 100 AS value
             FROM payments
             """,
-        ) == EXPECTED_FACTS["payment_success_rate"]
-        assert _fetch_named_revenue(
-            conn,
-            """
+            )
+            == EXPECTED_FACTS["payment_success_rate"]
+        )
+        assert (
+            _fetch_named_revenue(
+                conn,
+                """
             SELECT p.name AS name, SUM(oi.quantity * oi.unit_price) AS revenue
             FROM orders o
             JOIN order_items oi ON oi.order_id = o.id
@@ -216,11 +241,14 @@ def test_initialized_demo_database_matches_expected_analytics_facts() -> None:
             GROUP BY p.name
             ORDER BY revenue DESC, p.name ASC
             """,
-            "product",
-        ) == EXPECTED_FACTS["revenue_by_product"]
-        assert _fetch_named_revenue(
-            conn,
-            """
+                "product",
+            )
+            == EXPECTED_FACTS["revenue_by_product"]
+        )
+        assert (
+            _fetch_named_revenue(
+                conn,
+                """
             SELECT c.name AS name, SUM(oi.quantity * oi.unit_price) AS revenue
             FROM orders o
             JOIN order_items oi ON oi.order_id = o.id
@@ -230,15 +258,18 @@ def test_initialized_demo_database_matches_expected_analytics_facts() -> None:
             GROUP BY c.name
             ORDER BY revenue DESC, c.name ASC
             """,
-            "category",
-        ) == EXPECTED_FACTS["revenue_by_category"]
-        assert tuple(
-            {
-                "month": row["month"].isoformat(),
-                "revenue": _format_money(row["revenue"]),
-            }
-            for row in conn.execute(
-                """
+                "category",
+            )
+            == EXPECTED_FACTS["revenue_by_category"]
+        )
+        assert (
+            tuple(
+                {
+                    "month": row["month"].isoformat(),
+                    "revenue": _format_money(row["revenue"]),
+                }
+                for row in conn.execute(
+                    """
                 SELECT DATE_TRUNC('month', o.order_date)::date AS month,
                        SUM(oi.quantity * oi.unit_price) AS revenue
                 FROM orders o
@@ -247,8 +278,10 @@ def test_initialized_demo_database_matches_expected_analytics_facts() -> None:
                 GROUP BY month
                 ORDER BY month ASC
                 """
-            ).fetchall()
-        ) == EXPECTED_FACTS["revenue_by_month"]
+                ).fetchall()
+            )
+            == EXPECTED_FACTS["revenue_by_month"]
+        )
 
 
 def test_net_revenue_policy_rejects_fanout_and_executes_independent_aggregates() -> None:

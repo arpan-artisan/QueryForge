@@ -4,6 +4,8 @@ from pydantic import ValidationError
 from queryforge.models import (
     AgentRequest,
     ApprovedQuery,
+    AskDataResult,
+    ClarificationCandidate,
     MetricResolutionCandidate,
     PolicyDecision,
     QueryContext,
@@ -121,3 +123,30 @@ def test_metric_resolution_normalizes_blank_unused_clarification() -> None:
     )
 
     assert decision.clarification_question is None
+
+
+def test_clarification_result_contract_is_additive_and_rejects_query_data() -> None:
+    result = AskDataResult(
+        question="What is total revenue?",
+        status="clarification_required",
+        answer="Which revenue metric do you mean?",
+        provider="groq",
+        model="test",
+        clarification_question="Which revenue metric do you mean?",
+        clarification_candidates=[
+            ClarificationCandidate(id="gross_revenue", label="Gross revenue")
+        ],
+    )
+
+    assert result.model_dump(mode="json")["clarification_candidates"] == [
+        {"id": "gross_revenue", "label": "Gross revenue"}
+    ]
+    with pytest.raises(ValidationError, match="cannot contain SQL or rows"):
+        AskDataResult(
+            question="What is total revenue?",
+            status="clarification_required",
+            answer="Which revenue metric do you mean?",
+            provider="groq",
+            model="test",
+            sql="SELECT 1",
+        )

@@ -177,9 +177,7 @@ def test_langfuse_trace_exporter_exports_trace_events_with_fake_client() -> None
         "queryforge.ask_data.sql_validation",
         "queryforge.ask_data.execute_query",
     ]
-    assert all(
-        event["trace_context"] == {"trace_id": "qf_langfuse"} for event in client.events
-    )
+    assert all(event["trace_context"] == {"trace_id": "qf_langfuse"} for event in client.events)
     encoded = str(client.events)
     assert "sk_real_secret" not in encoded
     assert "gsk_real_secret" not in encoded
@@ -193,6 +191,4 @@ def test_langfuse_trace_exporter_exports_trace_events_with_fake_client() -> None
         == "SELECT COUNT(*) AS order_count FROM orders"
     )
     assert client.events[4]["metadata"]["metadata"]["row_count"] == 1
-    assert client.events[4]["metadata"]["metadata"]["preview_rows"] == [
-        {"total_revenue": 1345.0}
-    ]
+    assert client.events[4]["metadata"]["metadata"]["preview_rows"] == [{"total_revenue": 1345.0}]

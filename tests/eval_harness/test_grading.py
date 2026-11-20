@@ -436,6 +436,3 @@ def test_repeated_trials_count_every_failure():
     assert summary["tasks_passed_at_least_once"]["passed"] == 1
     assert summary["tasks_passed_every_trial"]["passed"] == 0
     assert second["partial_credit"] > 0 and not second["passed"]
-
-
-

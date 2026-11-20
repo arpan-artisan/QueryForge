@@ -30,9 +30,7 @@ class StubLLM:
         self.calls.append((question, schema_context))
         return self.sql
 
-    async def resolve_metric(
-        self, question: str, schema_context: str, metric_catalog: str
-    ) -> str:
+    async def resolve_metric(self, question: str, schema_context: str, metric_catalog: str) -> str:
         return (
             '{"status":"not_applicable","candidate_metric_ids":[],'
             '"resolved_metric_id":null,"reason":"No governed metric is needed.",'
@@ -201,9 +199,7 @@ def test_ask_data_runtime_is_public_runtime_entrypoint_with_default_memory_bound
     executor = StubExecutor()
     runtime = AskDataRuntime(llm_resolver=lambda: llm, query_tool=executor)  # type: ignore[arg-type]
 
-    result = asyncio.run(
-        runtime.run(AgentRequest(question="How many orders?", source="eval"))
-    )
+    result = asyncio.run(runtime.run(AgentRequest(question="How many orders?", source="eval")))
 
     assert result.status == "ok"
     assert result.request_id.startswith("qfr_")

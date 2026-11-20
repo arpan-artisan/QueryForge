@@ -75,8 +75,7 @@ class TraceRecorder(Protocol):
         error: str | None = None,
         started_at: datetime | None = None,
         duration_ms: float | None = None,
-    ) -> TraceStep:
-        ...
+    ) -> TraceStep: ...
 
     def record_skipped_step(
         self,
@@ -84,29 +83,24 @@ class TraceRecorder(Protocol):
         *,
         reason: str,
         metadata: dict[str, Any] | None = None,
-    ) -> TraceStep:
-        ...
+    ) -> TraceStep: ...
 
     def finish(
         self,
         status: AgentStatus,
         *,
         metadata: dict[str, Any] | None = None,
-    ) -> RunTrace:
-        ...
+    ) -> RunTrace: ...
 
-    def record_export_error(self, provider: str, message: str) -> None:
-        ...
+    def record_export_error(self, provider: str, message: str) -> None: ...
 
-    def snapshot(self) -> RunTrace:
-        ...
+    def snapshot(self) -> RunTrace: ...
 
 
 class TraceExporter(Protocol):
     provider_name: str
 
-    def export(self, trace: RunTrace) -> None:
-        ...
+    def export(self, trace: RunTrace) -> None: ...
 
 
 class LocalTraceRecorder:
@@ -205,11 +199,9 @@ class LangfuseClientProtocol(Protocol):
         metadata: Any | None = None,
         level: LangfuseEventLevel | None = None,
         status_message: str | None = None,
-    ) -> Any:
-        ...
+    ) -> Any: ...
 
-    def flush(self) -> None:
-        ...
+    def flush(self) -> None: ...
 
 
 class LangfuseTraceExporter:
@@ -316,9 +308,7 @@ def load_observability_config(env_file: str | Path = ".env") -> ObservabilityCon
     public_key = _configured_secret(os.getenv("LANGFUSE_PUBLIC_KEY"))
     secret_key = _configured_secret(os.getenv("LANGFUSE_SECRET_KEY"))
     base_url = (
-        os.getenv("LANGFUSE_BASE_URL")
-        or os.getenv("LANGFUSE_HOST")
-        or DEFAULT_LANGFUSE_BASE_URL
+        os.getenv("LANGFUSE_BASE_URL") or os.getenv("LANGFUSE_HOST") or DEFAULT_LANGFUSE_BASE_URL
     ).strip()
 
     if public_key is None or secret_key is None:

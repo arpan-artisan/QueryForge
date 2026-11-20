@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 type SQLPolicyStatus = Literal["allowed", "blocked", "unsupported", "invalid"]
 type IntentPolicyStatus = Literal["allowed", "blocked", "unsupported", "clarification_required"]
@@ -17,7 +17,9 @@ type IntentPolicyCategory = Literal[
     "resource_abuse",
     "policy_conflict",
 ]
-type AgentStatus = Literal["ok", "blocked", "error", "unsupported", "invalid", "clarification_required"]
+type AgentStatus = Literal[
+    "ok", "blocked", "error", "unsupported", "invalid", "clarification_required"
+]
 type TraceStepStatus = Literal[
     "ok",
     "blocked",
@@ -28,7 +30,9 @@ type TraceStepStatus = Literal[
     "skipped",
 ]
 type RequestSource = Literal["cli", "eval", "api", "ui"]
-type PolicyStatus = Literal["allowed", "blocked", "unsupported", "invalid", "clarification_required"]
+type PolicyStatus = Literal[
+    "allowed", "blocked", "unsupported", "invalid", "clarification_required"
+]
 type MetricResolutionStatus = Literal["resolved", "clarification_required", "not_applicable"]
 
 
@@ -66,6 +70,11 @@ class MetricResolutionCandidate(QueryForgeModel):
 
 class MetricResolutionDecision(MetricResolutionCandidate):
     pass
+
+
+class ClarificationCandidate(QueryForgeModel):
+    id: str = Field(min_length=1, max_length=100)
+    label: str = Field(min_length=1, max_length=200)
 
 
 class SQLCandidate(QueryForgeModel):
@@ -149,3 +158,19 @@ class AskDataResult(QueryForgeModel):
     validation_status: SQLPolicyStatus | None = None
     policy_code: str | None = None
     policy_reason: str | None = None
+    clarification_question: str | None = Field(default=None, max_length=500)
+    clarification_candidates: list[ClarificationCandidate] = Field(
+        default_factory=list,
+        max_length=16,
+    )
+
+    @model_validator(mode="after")
+    def validate_clarification_payload(self) -> "AskDataResult":
+        has_clarification = bool(self.clarification_question or self.clarification_candidates)
+        if self.status != "clarification_required" and has_clarification:
+            raise ValueError("Clarification details require clarification_required status.")
+        if self.status == "clarification_required" and (
+            self.sql is not None or self.rows or self.row_count != 0
+        ):
+            raise ValueError("A clarification result cannot contain SQL or rows.")
+        return self

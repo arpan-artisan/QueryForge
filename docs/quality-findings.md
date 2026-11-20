@@ -238,6 +238,38 @@ not close a finding.
   v1.2 and must be replaced through the separate live-quality-gate change before
   it can gate the updated suite.
 
+## QF-012: Approved customer-name projection loops through clarification
+
+- **Status:** Verified
+- **Priority:** High
+- **Observed input:** `List all the names of the customer.`
+- **Observed behavior:** The initial request and an explicit clarification both
+  returned `clarify_data_scope`. A shorter retry such as `List all customers`
+  then activated `blocked_resource_abuse`.
+- **Root cause:** Deterministic intent policy recognized aggregates and bounded
+  single-entity lookups but not a bounded projection of one approved column.
+  The broad-dump regex also treated the prefix `list all customer` in
+  `list all customer names` as a request for full customer records.
+- **Impact:** A clear, safe question over the approved `customers.name` column
+  could not reach SQL generation, and repeated clarification made the product
+  appear inconsistent.
+- **Resolution:** Added a narrow `allowed_bounded_projection` decision for
+  customer-name requests after all safety blocks. Customer emails, raw records,
+  and full customer dumps remain blocked. The resource-abuse rule excludes only
+  the explicit `name` projection from its customer prefix match.
+- **Coverage:** Intent-policy regressions cover the original wording, common
+  paraphrases, the frontend clarification payload, and the unchanged broad-dump
+  block. Guarded graph tests prove both original and clarified inputs reach SQL
+  validation and bounded execution. Live trace
+  `qf_86cba35594be4a0690774d8cd95019ff` returned all six fixture names.
+- **Verification evidence:** Focused policy and guarded-graph coverage passed
+  `129` tests. The full repository suite passed `650` tests with `8` expected
+  skips; Ruff lint, Ruff formatting, and strict OpenSpec validation also pass.
+- **Evaluation gap:** Development suite v1.3 has no plain approved-column
+  projection case. Promote this wording when the live baseline is next reviewed;
+  changing the 37-case suite alone would intentionally invalidate the current
+  baseline and require another full provider run.
+
 ## QF-011: Approved baseline omits subjective answer quality
 
 - **Status:** In progress
@@ -270,6 +302,58 @@ not close a finding.
 - **Required next step:** Complete and compose the infrastructure-clean judged
   development chunks, approve a v2 manifest from reviewed observations, and
   replay the gate as new chunks before changing this finding to verified.
+
+## QF-013: Explicit customer-order relationship loops through clarification
+
+- **Status:** Verified
+- **Priority:** High
+- **Observed input:** `show me what are the orders placed by all the unique customers`
+- **Observed behavior:** The original question and an explicit explanation to
+  show each customer with the orders they placed repeatedly returned
+  `clarify_data_scope`.
+- **Root cause:** Deterministic intent routing still assumed that a multi-row
+  request needed an aggregate metric or single-entity lookup. It did not
+  recognize an explicit projection over the approved `customers.id` to
+  `orders.customer_id` relationship.
+- **Resolution:** The bounded approved-projection decision now recognizes
+  customer-order wording with an explicit `placed by` relationship. It still
+  runs after destructive, sensitive, administrative, and resource-abuse blocks.
+  Generic `Show orders` remains clarification-required and `List all orders`
+  remains blocked.
+- **Coverage:** Policy and guarded graph tests cover both the original wording
+  and the frontend clarification payload. Live trace
+  `qf_393c2c67c0014ab28e6fb9f316949bda` returned ten bounded order rows covering
+  all six customers.
+- **Verification evidence:** The focused policy and guarded-graph slice passed
+  `135` tests. The full suite passed `656` tests with `8` expected skips; Ruff
+  lint, Ruff formatting, and strict OpenSpec validation also pass.
+- **Evaluation gap:** Like QF-012, development suite v1.3 has no non-aggregate
+  approved-relationship projection. Promote a representative case during the
+  next reviewed live-baseline refresh instead of invalidating the current
+  manifest without complete replacement evidence.
+
+## QF-014: Named-customer order lookup and requested limit are not resolved
+
+- **Status:** Confirmed
+- **Priority:** High
+- **Observed input:** `could you list the orders placed by kabir maximum limit of 1000`
+- **Observed behavior:** The browser returned `clarify_data_scope` even though
+  the request identifies the order entity, a customer-name filter, and a
+  requested limit. Trace: `qf_25398005e44e47a8a9d4607e253ee9d3`.
+- **Root cause:** Deterministic intent policy cannot infer that `Kabir` is a
+  value of the approved `customers.name` field when the word `customer` is not
+  present. The request contract also has no structured distinction between the
+  user's requested limit (`1000`) and QueryForge's enforced maximum (`100`).
+- **Expected behavior:** Resolve the named customer through approved schema
+  context, query that customer's orders, enforce the system row cap, and tell
+  the user that the requested limit was capped. Clarification is appropriate
+  only when the name matches multiple customers or another material meaning is
+  genuinely unresolved.
+- **Required next step:** Replace phrase-by-phrase allow rules with a dedicated
+  schema-grounded semantic request decision covering entities, attributes,
+  relationships, filters, requested/effective limits, and specific ambiguity.
+  Preserve deterministic safety checks before execution and add systematic
+  projection/join/filter/limit regressions plus representative live evals.
 
 ## QF-008: Live diagnostics required the reference suite's exact repair count
 

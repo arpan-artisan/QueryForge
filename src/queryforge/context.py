@@ -13,7 +13,9 @@ def build_query_context(
     if isinstance(memory_context, str):
         schema_text = memory_context
         memory_context = None
-    memory_text = memory_context_text(memory_context or MemoryContext(session_id=request.session_id))
+    memory_text = memory_context_text(
+        memory_context or MemoryContext(session_id=request.session_id)
+    )
     if not memory_text:
         return QueryContext(schema_text=schema_text)
     return QueryContext(schema_text=f"{schema_text}\n\n{memory_text}")

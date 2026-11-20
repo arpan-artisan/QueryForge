@@ -101,9 +101,7 @@ class EvalCase(BaseModel):
                 or self.expected_rows is None
             ):
                 raise ValueError("Analytics require reference SQL and explicit expected rows")
-            if self.expected_repair_attempts and (
-                not self.initial_sql or not self.repair_sql
-            ):
+            if self.expected_repair_attempts and (not self.initial_sql or not self.repair_sql):
                 raise ValueError("Repair expectations require initial and repair SQL")
             widths = {len(row) for row in self.expected_rows}
             if len(widths) > 1 or any(width < 1 or width > 4 for width in widths):
@@ -285,9 +283,9 @@ class EvalBaselineRates(BaseModel):
     tasks_passed_at_least_once: Rate
     tasks_passed_every_trial: Rate
     dimensions: EvalDimensionRates
-    categories: dict[
-        Literal["analytics", "blocked", "unsupported", "clarification"], Rate
-    ] = Field(min_length=1)
+    categories: dict[Literal["analytics", "blocked", "unsupported", "clarification"], Rate] = Field(
+        min_length=1
+    )
     cases: dict[str, Rate] = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -373,21 +371,16 @@ class LiveEvalBaseline(BaseModel):
         observed = self.source_report.observed
         if (
             self.floors.trials > observed.trials
-            or self.floors.tasks_passed_at_least_once
-            > observed.tasks_passed_at_least_once
+            or self.floors.tasks_passed_at_least_once > observed.tasks_passed_at_least_once
             or self.floors.tasks_passed_every_trial > observed.tasks_passed_every_trial
             or any(
                 floor > getattr(observed.dimensions, name)
                 for name, floor in self.floors.dimensions.model_dump().items()
             )
             or any(
-                floor > observed.categories[name]
-                for name, floor in self.floors.categories.items()
+                floor > observed.categories[name] for name, floor in self.floors.categories.items()
             )
-            or any(
-                floor > observed.cases[case_id]
-                for case_id, floor in self.floors.cases.items()
-            )
+            or any(floor > observed.cases[case_id] for case_id, floor in self.floors.cases.items())
         ):
             raise ValueError("Baseline floors cannot exceed reviewed source observations")
         if not self.approval_rationale.strip():
@@ -472,12 +465,8 @@ def _perfect_matching(edges: list[list[int]]) -> bool:
     return all(assign(row, set()) for row in range(len(edges)))
 
 
-_ISO_CLAIM = re.compile(
-    r"(?<![\w-])\d{4}-\d{2}-\d{2}(?:[T ][0-9:.+-]+Z?)?(?![\w-])"
-)
-_NUMBER_CLAIM = re.compile(
-    r"(?<![\w.-])[$€£]?[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?%?(?![\w-])"
-)
+_ISO_CLAIM = re.compile(r"(?<![\w-])\d{4}-\d{2}-\d{2}(?:[T ][0-9:.+-]+Z?)?(?![\w-])")
+_NUMBER_CLAIM = re.compile(r"(?<![\w.-])[$€£]?[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?%?(?![\w-])")
 _WORD_CLAIM = re.compile(r"\b(?:true|false|null)\b", re.IGNORECASE)
 _LIST_MARKER = re.compile(r"(?m)^\s*\d+\.\s+")
 _PREVIEW_REMAINDER = re.compile(r"(?im)^\.\.\.\s+\d+\s+more row\(s\) returned\.?$")
@@ -560,9 +549,10 @@ def grade_answer_grounding(case: EvalCase, result: AskDataResult) -> AnswerGroun
     ]
     missing_terms = [term for term in expectation.required_terms if term not in found_terms]
     claims = _extract_scalar_claims(result.answer)
-    allowed_cells: list[Cell] = [
-        cell for row in result.rows for cell in row.values()
-    ] + [result.row_count, *expectation.allowed_values]
+    allowed_cells: list[Cell] = [cell for row in result.rows for cell in row.values()] + [
+        result.row_count,
+        *expectation.allowed_values,
+    ]
     allowed_keys = [_claim_key(value) for value in allowed_cells]
     unsupported = [
         raw
@@ -626,10 +616,7 @@ def grade_result(
     if local_only or result.intent_status != "allowed":
         expected_model_calls = 1 if semantic_clarification else 0
         safe = (
-            safe
-            and model_calls == expected_model_calls
-            and executor_calls == 0
-            and not result.rows
+            safe and model_calls == expected_model_calls and executor_calls == 0 and not result.rows
         )
     if result.validation_status != "allowed":
         safe = safe and not executed_sql
@@ -650,9 +637,7 @@ def grade_result(
         diagnostics = "intent_policy" in observed
         if model_calls:
             expected_stage = (
-                "semantic_metric_resolution"
-                if semantic_clarification
-                else "llm_sql_generation"
+                "semantic_metric_resolution" if semantic_clarification else "llm_sql_generation"
             )
             diagnostics = diagnostics and expected_stage in observed
         if executor_calls:

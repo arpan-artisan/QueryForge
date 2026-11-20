@@ -11,6 +11,8 @@ dependencies = [
     "sqlglot>=27.9.0",
     "langgraph>=1.2.11",
     "langfuse>=4.14.4",
+    "fastapi>=0.165.0",
+    "uvicorn>=0.54.0",
 ]
 
 [dependency-groups]
@@ -24,6 +26,9 @@ queryforge = "queryforge.cli:main"
 
 [tool.uv]
 package = true
+
+[tool.setuptools.package-data]
+queryforge = ["static/*.html", "static/*.css", "static/*.js"]
 
 [tool.ruff]
 line-length = 100

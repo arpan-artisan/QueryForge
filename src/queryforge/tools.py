@@ -25,7 +25,10 @@ class QueryExecutorTool:
         validated_sql = _allowed_normalized_sql(query)
         if self.check_readiness:
             require_demo_database_ready(self.database_url)
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn, conn.cursor() as cursor:
+        with (
+            psycopg.connect(self.database_url, row_factory=dict_row) as conn,
+            conn.cursor() as cursor,
+        ):
             cursor.execute("SET statement_timeout = '5s'")
             cursor.execute(validated_sql)
             rows = cursor.fetchall()

@@ -38,9 +38,7 @@ pytestmark = pytest.mark.skipif(
         ("release", DEFAULT_RELEASE_SUITE),
     ],
 )
-def test_full_reference_suite_uses_postgres_and_preserves_content(
-    evaluation_set, suite_path
-):
+def test_full_reference_suite_uses_postgres_and_preserves_content(evaluation_set, suite_path):
     evaluation_suite, _ = load_suite(suite_path)
     require_demo_database_ready(DEFAULT_DATABASE_QUERY_URL)
     before = database_content_digest(DEFAULT_DATABASE_QUERY_URL)

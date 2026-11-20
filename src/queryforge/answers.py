@@ -22,10 +22,7 @@ def render_rows_as_answer(
     if len(rows) == 1 and len(first) == 1:
         key, value = next(iter(first.items()))
         if metric is not None:
-            return (
-                f"{metric.display_name} is {value}. "
-                f"Metric definition: {metric.definition}"
-            )
+            return f"{metric.display_name} is {value}. Metric definition: {metric.definition}"
         if _is_generic_column_name(key):
             return f'Result for "{_question_context(question)}": {value}.'
         pretty_key = key.replace("_", " ")

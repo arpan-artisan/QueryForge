@@ -9,7 +9,12 @@ from queryforge.demo_database import (
     EXPECTED_FACTS,
     EXPECTED_ROW_COUNTS,
 )
-from queryforge.schema import REVENUE_METRIC_DEFINITIONS, SCHEMA_CONTEXT
+from queryforge.schema import (
+    APPROVED_SCHEMA_CATALOG,
+    REVENUE_METRIC_DEFINITIONS,
+    SCHEMA_CONTEXT,
+    render_schema_context,
+)
 from queryforge.schema_policy import APPROVED_TABLES
 
 
@@ -22,6 +27,31 @@ def test_schema_context_mentions_all_demo_tables_and_relationships() -> None:
     for source_table, source_column, target_table, target_column in DEMO_FOREIGN_KEYS:
         relationship = f"{source_table}.{source_column} -> {target_table}.{target_column}"
         assert relationship in SCHEMA_CONTEXT
+
+
+def test_approved_schema_catalog_is_typed_complete_and_prompt_aligned() -> None:
+    catalog = APPROVED_SCHEMA_CATALOG
+
+    assert catalog.schema_name == "public"
+    assert tuple(table.name for table in catalog.tables) == DEMO_TABLE_NAMES
+    assert {
+        table.name: frozenset(column.name for column in table.columns) for table in catalog.tables
+    } == DEMO_QUERY_COLUMNS
+    assert all(table.description and table.grain for table in catalog.tables)
+    assert catalog.tables[0].columns[0].data_type == "integer"
+    assert catalog.tables[4].columns[-1].description == "purchase-time line-item price"
+    assert {
+        (
+            relationship.source_table,
+            relationship.source_column,
+            relationship.target_table,
+            relationship.target_column,
+        )
+        for relationship in catalog.relationships
+    } == set(DEMO_FOREIGN_KEYS)
+    assert "email" not in {column.name for table in catalog.tables for column in table.columns}
+    assert "information_schema" not in render_schema_context(catalog)
+    assert render_schema_context(catalog) == SCHEMA_CONTEXT
 
 
 def test_revenue_metric_catalog_is_exact_and_immutable() -> None:

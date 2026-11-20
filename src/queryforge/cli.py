@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import psycopg
+import uvicorn
 
 from queryforge.llm import create_llm_provider
 from queryforge.memory import InMemorySessionStore
@@ -66,6 +67,9 @@ def main() -> None:
         "chat", help="Ask multiple questions in one memory session."
     )
     chat_parser.add_argument("--session", required=True, help="Session id for this chat.")
+
+    web_parser = subparsers.add_parser("web", help="Start the local Ask Data browser interface.")
+    web_parser.add_argument("--port", type=int, default=8000, help="Loopback port (default: 8000).")
 
     evals_parser = subparsers.add_parser("evals", help="Evaluate Ask Data on known tasks.")
     eval_commands = evals_parser.add_subparsers(dest="eval_command", required=True)
@@ -232,6 +236,12 @@ def main() -> None:
 
     if args.command == "chat":
         asyncio.run(chat(args.session))
+        return
+
+    if args.command == "web":
+        from queryforge.web import create_app
+
+        uvicorn.run(create_app(_runtime()), host="127.0.0.1", port=args.port)
         return
 
     parser.print_help()

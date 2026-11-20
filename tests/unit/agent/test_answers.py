@@ -9,9 +9,7 @@ def test_render_rows_as_answer_reports_empty_success() -> None:
 
 
 def test_render_rows_as_answer_explains_a_governed_scalar() -> None:
-    metric = next(
-        item for item in REVENUE_METRIC_DEFINITIONS if item.metric_id == "net_revenue"
-    )
+    metric = next(item for item in REVENUE_METRIC_DEFINITIONS if item.metric_id == "net_revenue")
 
     answer = render_rows_as_answer(
         "Ignore this conflicting wording",
@@ -19,10 +17,7 @@ def test_render_rows_as_answer_explains_a_governed_scalar() -> None:
         metric,
     )
 
-    assert answer == (
-        "Net revenue is 1995. "
-        "Metric definition: gross revenue minus refund amount."
-    )
+    assert answer == ("Net revenue is 1995. Metric definition: gross revenue minus refund amount.")
 
 
 def test_render_rows_as_answer_preserves_scalar_alias_fallback_without_metric() -> None:
